@@ -1,8 +1,8 @@
 # PolicyPilot Architecture
 
-> Phase 1 — Foundation. Last updated: 2026-10-27.
+> Phase 2 — Document Ingestion and Text Extraction. Last updated: 2026-10-27.
 
-This document describes the current architecture of PolicyPilot and outlines where future capabilities will be integrated. Sections are marked **[IMPLEMENTED]** or **[PLANNED]** to distinguish working code from design intent.
+This document describes the current architecture of PolicyPilot and outlines where future capabilities will be integrated. Sections are explicitly marked **[IMPLEMENTED]** or **[PLANNED]** to distinguish working code from future design intent.
 
 ---
 
@@ -15,14 +15,14 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 ## 2. System Layers
 
 ```
-┌─────────────────────────────────────┐
-│           Frontend (Next.js)        │  ← User interface
-├─────────────────────────────────────┤
-│           Backend  (FastAPI)        │  ← API, orchestration
-├──────┬──────┬───────┬───────────────┤
-│ PDF  │ Vec  │ BM25  │ LLM / Rerank │  ← RAG components (future)
-│ Ing  │ DB   │       │              │
-└──────┴──────┴───────┴───────────────┘
+┌──────────────────────────────────────────────┐
+│             Frontend (Next.js 16)            │  ← User interface (Dashboard, Upload, Viewer)
+├──────────────────────────────────────────────┤
+│             Backend  (FastAPI)               │  ← API, storage & document ingestion
+├──────────────┬───────────────┬───────┬───────┤
+│ PDF Ingestion│ Vector DB     │ BM25  │ LLM   │  ← Ingestion [IMPLEMENTED], RAG [PLANNED]
+│ (PyMuPDF)    │ (Qdrant)      │ (RRF) │ (Rer) │
+└──────────────┴───────────────┴───────┴───────┘
 ```
 
 ---
@@ -32,19 +32,22 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | Concern | Status |
 |---------|--------|
 | Landing / dashboard shell | ✅ Implemented |
-| Backend health-status display | ✅ Implemented |
-| Loading / healthy / unavailable states | ✅ Implemented |
-| Configurable backend URL (env var) | ✅ Implemented |
+| Backend health-status badge | ✅ Implemented |
+| PDF file picker with validation | ✅ Implemented |
+| Upload & processing states | ✅ Implemented |
+| Ingested document library list (`GET /api/documents`) | ✅ Implemented |
+| Document detail panel with page-by-page text viewer | ✅ Implemented |
+| Stream / open original PDF (`GET /api/documents/{id}/file`) | ✅ Implemented |
+| Configurable backend URL (`NEXT_PUBLIC_API_URL`) | ✅ Implemented |
 | Timeout and error handling | ✅ Implemented |
 
 **Stack:** Next.js 16, React 19, TypeScript, Tailwind CSS v3.
 
 **Planned additions (later phases):**
-- Policy question input and answer display.
-- Citation viewer with page-level links.
-- Document library / upload UI.
+- Natural language policy question input and answer display.
+- Grounded citation viewer with highlightable page-level links.
 - Search diagnostics panel.
-- Evaluation dashboard.
+- RAG benchmark and evaluation dashboard.
 
 ---
 
@@ -53,18 +56,26 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | Concern | Status |
 |---------|--------|
 | FastAPI application entry point | ✅ Implemented |
-| `GET /health` endpoint | ✅ Implemented |
-| Pydantic response models | ✅ Implemented |
-| CORS configuration (env-driven) | ✅ Implemented |
-| Automated tests (pytest) | ✅ Implemented |
+| `GET /health` liveness endpoint | ✅ Implemented |
+| `POST /api/documents/upload` PDF ingestion | ✅ Implemented |
+| `GET /api/documents` document library listing | ✅ Implemented |
+| `GET /api/documents/{document_id}` document detail | ✅ Implemented |
+| `GET /api/documents/{document_id}/file` original file streaming | ✅ Implemented |
+| PyMuPDF page-preserving text extraction | ✅ Implemented |
+| Atomic local storage & JSON metadata persistence | ✅ Implemented |
+| SHA-256 document hashing for audit/deduplication | ✅ Implemented |
+| Path traversal protection & server-generated UUIDs | ✅ Implemented |
+| Automated pytest test suite | ✅ Implemented |
 
-**Stack:** Python 3.12, FastAPI, Pydantic, Uvicorn.
+**Stack:** Python 3.12, FastAPI, PyMuPDF, Pydantic, Uvicorn.
 
 **Planned additions (later phases):**
-- PDF upload and ingestion endpoints.
-- Policy question / answer endpoint.
-- Document library endpoints.
-- Search diagnostics endpoints.
+- Section-aware text chunking.
+- Dense vector embeddings (OpenAI / Gemini / local).
+- Vector indexing with Qdrant.
+- BM25 sparse keyword retrieval & Reciprocal Rank Fusion (RRF).
+- Reranking model integration.
+- Grounded LLM answer generation with citation verification.
 
 ---
 
@@ -72,22 +83,32 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 
 - Frontend → Backend over HTTP REST.
 - Base URL configurable via `NEXT_PUBLIC_API_URL` (frontend) / `CORS_ORIGINS` (backend).
-- All requests are standard JSON; no auth required in Phase 1.
+- All requests are standard JSON / multipart form data; no auth required in Phase 2.
 
-### Current Endpoints
+### Implemented Endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/health` | Service liveness check |
+| POST | `/api/documents/upload` | Multipart upload, storage, and page extraction |
+| GET | `/api/documents` | Metadata listing of all ingested documents |
+| GET | `/api/documents/{document_id}` | Detailed document metadata with page extractions |
+| GET | `/api/documents/{document_id}/file` | Download or stream original PDF |
 
 ---
 
-## 6. PDF Ingestion — [PLANNED]
+## 6. PDF Ingestion & Extraction Architecture — [IMPLEMENTED]
 
-- **Library:** PyMuPDF (`fitz`).
-- **Flow:** Upload PDF → extract text per page → store raw text with page numbers.
-- **Key invariant:** Page numbers are preserved from extraction through to citation display.
-- Pages will be stored with a document ID, page number, and raw text.
+- **Engine:** PyMuPDF (`pymupdf`).
+- **Identity:** Each document receives a server-generated UUID (`document_id`).
+- **File Storage:** Stored as `backend/data/documents/{document_id}.pdf` (gitignored).
+- **Metadata Storage:** Stored atomically as `backend/data/metadata/{document_id}.json` (gitignored).
+- **Page Invariant:** Page numbers are 1-based and match standard PDF viewers.
+- **Image-Only Documents:** Processed safely without crashing; pages are preserved with `text=""` and status indicates OCR is unsupported in Phase 2.
+- **Security:**
+  - Filenames sanitized to avoid directory traversal.
+  - Streaming chunked upload enforces `MAX_UPLOAD_SIZE_BYTES` (default 10 MB).
+  - Malformed, corrupt, or encrypted files are rejected with HTTP 400 and temporary files cleaned up.
 
 ---
 
@@ -127,28 +148,23 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 The chain of document identity flows end-to-end:
 
 ```
-PDF upload
-  → page-level text extraction (page_number preserved)
-    → section-aware chunking (document_id + page_number + section)
-      → embedding storage (metadata attached to vectors)
-        → retrieval results (metadata returned with chunks)
-          → LLM prompt (chunks include page refs)
-            → answer response (citations with page numbers)
-              → frontend display (clickable page links)
+PDF upload [DONE]
+  → page-level text extraction (page_number preserved) [DONE]
+    → section-aware chunking (document_id + page_number + section) [PLANNED]
+      → embedding storage (metadata attached to vectors) [PLANNED]
+        → retrieval results (metadata returned with chunks) [PLANNED]
+          → LLM prompt (chunks include page refs) [PLANNED]
+            → answer response (citations with page numbers) [PLANNED]
+              → frontend display (clickable page links) [PLANNED]
 ```
 
 ---
 
-## 10. Testing and Evaluation — [PLANNED]
+## 10. Testing and Verification — [IMPLEMENTED]
 
-### 10.1 Unit and Integration Tests
-- Backend: pytest (partially implemented for `/health`).
-- Frontend: TBD (likely Vitest or Jest with React Testing Library).
-
-### 10.2 RAG Evaluation
-- Benchmark dataset of question–answer pairs with expected citations.
-- Metrics: retrieval recall, answer faithfulness, citation accuracy.
-- Evaluation harness runnable from CLI.
+- **Backend Tests:** 20 automated pytest tests covering upload, multi-page extraction, blank pages, corruption rejection, oversize rejection, metadata listing, detail retrieval, file streaming, and path traversal security.
+- **Code Quality:** Ruff linter & formatter for Python; ESLint and TypeScript for Next.js.
+- **Browser Verification:** Real end-to-end browser verification of document upload and page extraction viewer.
 
 ---
 
@@ -156,10 +172,8 @@ PDF upload
 
 | Decision | Notes |
 |----------|-------|
-| Storage backend for documents/chunks | Qdrant for vectors; text/metadata storage TBD (filesystem, SQLite, or Postgres). |
-| Embedding model selection | Depends on cost, latency, and quality benchmarking. |
-| Reranker model | Cross-encoder vs. API-based reranker TBD. |
-| Auth / multi-tenancy | Not in scope for early phases. |
-| Deployment platform | Not decided; Docker Compose likely for development. |
-| Frontend state management | React state sufficient for now; may add Zustand if complexity grows. |
-| Chunk size / overlap | Needs empirical tuning during RAG phase. |
+| Storage backend for production | Local filesystem used for Phase 2; S3/GCS object storage suitable for cloud deployment. |
+| Embedding model selection | Will benchmark OpenAI `text-embedding-3-small` vs Gemini embeddings in Phase 3. |
+| Reranker model | Cross-encoder (e.g. `bge-reranker`) vs. API-based reranker TBD. |
+| OCR Support | Tesseract or Cloud OCR can be plugged into `pdf_service.py` if scanned document volume requires it. |
+| Multi-tenancy | Document namespace / tenant IDs can be attached to metadata schema when auth is introduced. |

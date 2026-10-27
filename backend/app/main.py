@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import health
+from app.routers import documents, health
 
 app = FastAPI(
     title=settings.app_name,
@@ -15,9 +15,7 @@ app = FastAPI(
 # Configure CORS so the frontend dev server can reach the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip() for origin in settings.cors_origins.split(",")
-    ],
+    allow_origins=[origin.strip() for origin in settings.cors_origins.split(",")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -25,3 +23,4 @@ app.add_middleware(
 
 # Register routers
 app.include_router(health.router)
+app.include_router(documents.router)

@@ -41,3 +41,9 @@ htmlcov/
 *.pid
 .ruff_cache/
 tsconfig.tsbuildinfo
+
+# --- Local Data & Document Storage (Phase 2+) ---
+backend/data/
+data/
+*.pdf
+
