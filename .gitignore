@@ -1,0 +1,43 @@
+# ============================================================
+# PolicyPilot .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+dist/
+build/
+.venv/
+venv/
+env/
+*.env
+!.env.example
+
+# --- Node / Frontend ---
+node_modules/
+.next/
+out/
+.turbo/
+
+# --- IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Testing / Coverage ---
+.coverage
+htmlcov/
+.pytest_cache/
+
+# --- Misc ---
+*.log
+*.pid
+.ruff_cache/
+tsconfig.tsbuildinfo

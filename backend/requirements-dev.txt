@@ -1,0 +1,5 @@
+# Development / testing dependencies
+-r requirements.txt
+pytest>=8,<9
+httpx>=0.27,<1
+ruff>=0.7,<1
