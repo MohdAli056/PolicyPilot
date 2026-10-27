@@ -36,6 +36,16 @@ interface DocumentDetail extends DocumentMetadata {
   pages: PageExtraction[];
 }
 
+interface DocumentChunk {
+  chunk_id: string;
+  document_id: string;
+  chunk_index: number;
+  text: string;
+  section: string | null;
+  page_numbers: number[];
+  character_count: number;
+}
+
 export default function Home() {
   // Backend health state
   const [healthStatus, setHealthStatus] = useState<HealthStatus>("loading");
@@ -57,6 +67,12 @@ export default function Home() {
   const [docDetail, setDocDetail] = useState<DocumentDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState<boolean>(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+
+  // Chunks state
+  const [chunks, setChunks] = useState<DocumentChunk[]>([]);
+  const [loadingChunks, setLoadingChunks] = useState<boolean>(false);
+  const [chunksError, setChunksError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"chunks" | "pages">("chunks");
 
   // Check backend health
   const checkHealth = () => {
@@ -114,7 +130,6 @@ export default function Home() {
     fetchDocuments();
   }, []);
 
-
   // Handle PDF file selection
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null;
@@ -154,7 +169,7 @@ export default function Home() {
       }
 
       setUploadSuccess(
-        `Document "${data.filename}" successfully ingested: ${data.total_pages} page(s), ${data.total_characters} characters extracted.`
+        `Document "${data.filename}" successfully ingested: ${data.total_pages} page(s), ${data.total_characters} characters extracted and chunked.`
       );
       setSelectedFile(null);
 
@@ -166,7 +181,6 @@ export default function Home() {
       setLoadingDocs(true);
       fetchDocuments();
       openDetail(data.document_id);
-
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : "Failed to upload document.");
     } finally {
@@ -179,7 +193,11 @@ export default function Home() {
     setSelectedDocId(docId);
     setLoadingDetail(true);
     setDetailError(null);
+    setLoadingChunks(true);
+    setChunksError(null);
+    setActiveTab("chunks");
 
+    // Fetch document metadata and pages
     fetch(`${API_URL}/api/documents/${docId}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -194,12 +212,30 @@ export default function Home() {
       .finally(() => {
         setLoadingDetail(false);
       });
+
+    // Fetch document chunks
+    fetch(`${API_URL}/api/documents/${docId}/chunks`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: { chunks: DocumentChunk[]; total_chunks: number }) => {
+        setChunks(data.chunks);
+      })
+      .catch((err) => {
+        setChunksError(err instanceof Error ? err.message : "Failed to load document chunks.");
+      })
+      .finally(() => {
+        setLoadingChunks(false);
+      });
   };
 
   const closeDetail = () => {
     setSelectedDocId(null);
     setDocDetail(null);
     setDetailError(null);
+    setChunks([]);
+    setChunksError(null);
   };
 
   return (
@@ -211,7 +247,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 2: Ingestion & Text Extraction
+                AI-powered company policy assistant — Phase 3: Document Chunking & Metadata
               </p>
             </div>
 
@@ -251,7 +287,7 @@ export default function Home() {
             Upload Policy PDF
           </h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-            Upload a policy document in PDF format. Text will be extracted page-by-page preserving 1-based page numbers.
+            Upload a policy document in PDF format. Text is extracted page-by-page and partitioned into structured, reproducible chunks.
           </p>
 
           <form onSubmit={handleUpload} className="space-y-4">
@@ -270,7 +306,7 @@ export default function Home() {
                 disabled={!selectedFile || uploading}
                 className="px-5 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md whitespace-nowrap transition-colors"
               >
-                {uploading ? "Extracting Pages…" : "Upload & Ingest"}
+                {uploading ? "Ingesting & Chunking…" : "Upload & Ingest"}
               </button>
             </div>
 
@@ -349,7 +385,7 @@ export default function Home() {
                           onClick={() => openDetail(doc.document_id)}
                           className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
                         >
-                          View Extracted Text
+                          View Chunks & Pages
                         </button>
                         <span className="text-gray-300 dark:text-gray-700">|</span>
                         <a
@@ -369,13 +405,14 @@ export default function Home() {
           )}
         </section>
 
-        {/* Document Detail View */}
+        {/* Document Detail & Chunks View */}
         {selectedDocId && (
           <section
             aria-labelledby="detail-heading"
             id="document-detail-panel"
-            className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm space-y-4"
+            className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm space-y-5"
           >
+            {/* Header */}
             <div className="flex items-start justify-between border-b border-gray-200 dark:border-gray-800 pb-3">
               <div>
                 <h3 id="detail-heading" className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -410,7 +447,7 @@ export default function Home() {
 
             {loadingDetail ? (
               <p className="text-xs text-gray-500 dark:text-gray-400 py-6 text-center">
-                Fetching extracted page text…
+                Fetching document details…
               </p>
             ) : detailError ? (
               <div className="text-xs text-red-600 dark:text-red-400 p-3 bg-red-50 dark:bg-red-950/40 rounded">
@@ -418,7 +455,8 @@ export default function Home() {
               </div>
             ) : docDetail ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-4 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40 p-3 rounded">
+                {/* Stats summary bar */}
+                <div className="flex flex-wrap items-center gap-4 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/40 p-3 rounded">
                   <span>
                     Total Pages: <strong className="text-gray-900 dark:text-gray-100">{docDetail.total_pages}</strong>
                   </span>
@@ -426,39 +464,127 @@ export default function Home() {
                     Total Characters: <strong className="text-gray-900 dark:text-gray-100">{docDetail.total_characters.toLocaleString()}</strong>
                   </span>
                   <span>
+                    Total Chunks: <strong className="text-gray-900 dark:text-gray-100">{chunks.length}</strong>
+                  </span>
+                  <span>
                     Status: <strong className="text-gray-900 dark:text-gray-100">{docDetail.ingestion_status}</strong>
                   </span>
                 </div>
 
-                {/* Page by page extracted text */}
-                <div className="space-y-4">
-                  {docDetail.pages.map((p) => (
-                    <div
-                      key={p.page_number}
-                      className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden"
-                    >
-                      <div className="bg-gray-100/70 dark:bg-gray-800/60 px-3 py-1.5 flex items-center justify-between text-xs">
-                        <span className="font-semibold text-gray-700 dark:text-gray-200">
-                          Page {p.page_number} of {docDetail.total_pages}
-                        </span>
-                        <span className="text-gray-500 dark:text-gray-400 text-[11px]">
-                          {p.character_count.toLocaleString()} characters
-                        </span>
-                      </div>
-                      <div className="p-3 bg-white dark:bg-gray-900">
-                        {p.text.trim().length > 0 ? (
-                          <pre className="text-xs whitespace-pre-wrap font-mono text-gray-800 dark:text-gray-200 leading-relaxed max-h-72 overflow-y-auto">
-                            {p.text}
-                          </pre>
-                        ) : (
-                          <p className="text-xs italic text-gray-400 dark:text-gray-500 py-2">
-                            (No extractable text found on this page. If this page is an image or scanned document, OCR is not supported in Phase 2.)
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                {/* Tabs */}
+                <div className="border-b border-gray-200 dark:border-gray-800 flex gap-4 text-xs">
+                  <button
+                    id="tab-chunks"
+                    onClick={() => setActiveTab("chunks")}
+                    className={`pb-2 font-medium transition-colors border-b-2 ${
+                      activeTab === "chunks"
+                        ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    }`}
+                  >
+                    Structured Chunks ({chunks.length})
+                  </button>
+                  <button
+                    id="tab-pages"
+                    onClick={() => setActiveTab("pages")}
+                    className={`pb-2 font-medium transition-colors border-b-2 ${
+                      activeTab === "pages"
+                        ? "border-blue-600 text-blue-600 dark:text-blue-400"
+                        : "border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                    }`}
+                  >
+                    Raw Extracted Pages ({docDetail.total_pages})
+                  </button>
                 </div>
+
+                {/* Chunks View */}
+                {activeTab === "chunks" && (
+                  <div className="space-y-4" id="chunks-container">
+                    {loadingChunks ? (
+                      <p className="text-xs text-gray-500 dark:text-gray-400 py-6 text-center">
+                        Loading document chunks…
+                      </p>
+                    ) : chunksError ? (
+                      <div className="text-xs text-red-600 dark:text-red-400 p-3 bg-red-50 dark:bg-red-950/40 rounded">
+                        {chunksError}
+                      </div>
+                    ) : chunks.length === 0 ? (
+                      <p className="text-xs italic text-gray-500 dark:text-gray-400 py-4 text-center">
+                        No chunks available for this document. (Document has no extractable text).
+                      </p>
+                    ) : (
+                      chunks.map((chunk) => (
+                        <div
+                          key={chunk.chunk_id}
+                          className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden bg-white dark:bg-gray-900"
+                        >
+                          <div className="bg-gray-100/70 dark:bg-gray-800/60 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-gray-800 dark:text-gray-100">
+                                Chunk #{chunk.chunk_index}
+                              </span>
+                              {chunk.section && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                  {chunk.section}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-[11px] text-gray-500 dark:text-gray-400">
+                              <span>
+                                Page{chunk.page_numbers.length > 1 ? "s" : ""}:{" "}
+                                <strong className="text-gray-700 dark:text-gray-300 font-mono">
+                                  {chunk.page_numbers.join(", ")}
+                                </strong>
+                              </span>
+                              <span>•</span>
+                              <span>{chunk.character_count.toLocaleString()} chars</span>
+                            </div>
+                          </div>
+                          <div className="p-3">
+                            <pre className="text-xs whitespace-pre-wrap font-mono text-gray-800 dark:text-gray-200 leading-relaxed max-h-64 overflow-y-auto bg-gray-50 dark:bg-gray-950/60 p-2.5 rounded border border-gray-100 dark:border-gray-800/80">
+                              {chunk.text}
+                            </pre>
+                            <p className="text-[10px] text-gray-400 dark:text-gray-600 mt-1 font-mono">
+                              Chunk ID: {chunk.chunk_id}
+                            </p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+
+                {/* Raw Pages View */}
+                {activeTab === "pages" && (
+                  <div className="space-y-4" id="pages-container">
+                    {docDetail.pages.map((p) => (
+                      <div
+                        key={p.page_number}
+                        className="border border-gray-200 dark:border-gray-800 rounded-md overflow-hidden"
+                      >
+                        <div className="bg-gray-100/70 dark:bg-gray-800/60 px-3 py-1.5 flex items-center justify-between text-xs">
+                          <span className="font-semibold text-gray-700 dark:text-gray-200">
+                            Page {p.page_number} of {docDetail.total_pages}
+                          </span>
+                          <span className="text-gray-500 dark:text-gray-400 text-[11px]">
+                            {p.character_count.toLocaleString()} characters
+                          </span>
+                        </div>
+                        <div className="p-3 bg-white dark:bg-gray-900">
+                          {p.text.trim().length > 0 ? (
+                            <pre className="text-xs whitespace-pre-wrap font-mono text-gray-800 dark:text-gray-200 leading-relaxed max-h-72 overflow-y-auto">
+                              {p.text}
+                            </pre>
+                          ) : (
+                            <p className="text-xs italic text-gray-400 dark:text-gray-500 py-2">
+                              (No extractable text found on this page. If this page is an image or scanned document, OCR is not supported in Phase 2/3.)
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ) : null}
           </section>

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import Settings, settings
+from app.schemas.chunk import DocumentChunk
 from app.schemas.document import DocumentDetail, DocumentMetadata
 
 UUID_REGEX = re.compile(
@@ -18,18 +19,20 @@ UUID_REGEX = re.compile(
 
 
 class StorageService:
-    """Service for managing PDF and metadata persistence on the local filesystem."""
+    """Service for managing document, metadata, and chunk persistence."""
 
     def __init__(self, custom_settings: Optional[Settings] = None):
         self.settings = custom_settings or settings
         self.documents_dir = self.settings.get_documents_path()
         self.metadata_dir = self.settings.get_metadata_path()
+        self.chunks_dir = self.settings.get_chunks_path()
         self._ensure_directories()
 
     def _ensure_directories(self) -> None:
         """Create storage directories if they do not exist."""
         self.documents_dir.mkdir(parents=True, exist_ok=True)
         self.metadata_dir.mkdir(parents=True, exist_ok=True)
+        self.chunks_dir.mkdir(parents=True, exist_ok=True)
 
     def validate_document_id(self, document_id: str) -> bool:
         """Check if document_id is a valid UUID format to prevent path traversal."""
@@ -66,6 +69,21 @@ class StorageService:
             return None
         return None
 
+    def get_chunks_file_path(self, document_id: str) -> Optional[Path]:
+        """Return the path to the stored chunks JSON file if valid and existing."""
+        if not self.validate_document_id(document_id):
+            return None
+        chunk_path = self.chunks_dir / f"{document_id}.json"
+        try:
+            resolved = chunk_path.resolve()
+            if not resolved.is_relative_to(self.chunks_dir.resolve()):
+                return None
+            if resolved.exists() and resolved.is_file():
+                return resolved
+        except (ValueError, RuntimeError):
+            return None
+        return None
+
     def save_document(self, document: DocumentDetail) -> None:
         """Atomically persist document detail and metadata as JSON."""
         if not self.validate_document_id(document.document_id):
@@ -95,6 +113,36 @@ class StorageService:
         except Exception:
             return None
 
+    def save_chunks(self, document_id: str, chunks: list[DocumentChunk]) -> None:
+        """Atomically persist document chunks as JSON."""
+        if not self.validate_document_id(document_id):
+            raise ValueError(f"Invalid document ID format: {document_id}")
+
+        target_file = self.chunks_dir / f"{document_id}.json"
+        temp_file = self.chunks_dir / f"{document_id}.tmp"
+
+        payload = [c.model_dump() for c in chunks]
+
+        with open(temp_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+
+        temp_file.replace(target_file)
+
+    def get_chunks(self, document_id: str) -> Optional[list[DocumentChunk]]:
+        """Retrieve stored chunks for a document, sorted by chunk_index."""
+        path = self.get_chunks_file_path(document_id)
+        if not path:
+            return None
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            chunks = [DocumentChunk.model_validate(item) for item in data]
+            chunks.sort(key=lambda c: c.chunk_index)
+            return chunks
+        except Exception:
+            return None
+
     def list_documents(self) -> list[DocumentMetadata]:
         """Retrieve all ingested documents metadata, sorted by uploaded_at."""
         documents: list[DocumentMetadata] = []
@@ -118,15 +166,19 @@ class StorageService:
         return documents
 
     def cleanup_document(self, document_id: str) -> None:
-        """Clean up PDF and metadata files for a given document ID."""
+        """Clean up PDF, metadata, and chunk files for a given document ID."""
         if not self.validate_document_id(document_id):
             return
 
-        pdf_path = self.documents_dir / f"{document_id}.pdf"
-        meta_path = self.metadata_dir / f"{document_id}.json"
-        temp_meta = self.metadata_dir / f"{document_id}.tmp"
+        paths_to_clean = [
+            self.documents_dir / f"{document_id}.pdf",
+            self.metadata_dir / f"{document_id}.json",
+            self.metadata_dir / f"{document_id}.tmp",
+            self.chunks_dir / f"{document_id}.json",
+            self.chunks_dir / f"{document_id}.tmp",
+        ]
 
-        for p in (pdf_path, meta_path, temp_meta):
+        for p in paths_to_clean:
             try:
                 if p.exists():
                     p.unlink()

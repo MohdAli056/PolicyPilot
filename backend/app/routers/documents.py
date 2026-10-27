@@ -9,11 +9,13 @@ from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
 from app.config import settings
+from app.schemas.chunk import DocumentChunkListResponse
 from app.schemas.document import (
     DocumentDetail,
     DocumentListResponse,
     DocumentMetadata,
 )
+from app.services.chunking_service import chunk_document
 from app.services.pdf_service import (
     PDFValidationError,
     compute_sha256,
@@ -125,10 +127,15 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentDetail:
 
         # Persist document metadata and page extraction atomically
         storage_service.save_document(doc_detail)
+
+        # Generate structured text chunks and persist them
+        chunks = await asyncio.to_thread(chunk_document, document_id, pages)
+        storage_service.save_chunks(document_id, chunks)
+
         return doc_detail
 
     except HTTPException:
-        # Clean up partial or rejected PDF file
+        # Clean up partial or rejected PDF file and chunks
         storage_service.cleanup_document(document_id)
         raise
 
@@ -174,6 +181,39 @@ async def get_document(document_id: str) -> DocumentDetail:
             detail="Document not found.",
         )
     return doc
+
+
+@router.get(
+    "/{document_id}/chunks",
+    response_model=DocumentChunkListResponse,
+    summary="Get structured text chunks for a document",
+)
+async def get_document_chunks(document_id: str) -> DocumentChunkListResponse:
+    """Return sequential text chunks with section and page attribution metadata."""
+    if not storage_service.validate_document_id(document_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    doc = storage_service.get_document(document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    chunks = storage_service.get_chunks(document_id)
+    if chunks is None:
+        # Generate on-demand if not pre-persisted
+        chunks = await asyncio.to_thread(chunk_document, document_id, doc.pages)
+        storage_service.save_chunks(document_id, chunks)
+
+    return DocumentChunkListResponse(
+        document_id=document_id,
+        total_chunks=len(chunks),
+        chunks=chunks,
+    )
 
 
 @router.get(

@@ -32,11 +32,14 @@ def isolated_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Ensure all tests operate within an isolated temporary storage directory."""
     temp_docs = tmp_path / "documents"
     temp_meta = tmp_path / "metadata"
+    temp_chunks = tmp_path / "chunks"
     temp_docs.mkdir(parents=True, exist_ok=True)
     temp_meta.mkdir(parents=True, exist_ok=True)
+    temp_chunks.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(storage_service, "documents_dir", temp_docs)
     monkeypatch.setattr(storage_service, "metadata_dir", temp_meta)
+    monkeypatch.setattr(storage_service, "chunks_dir", temp_chunks)
 
 
 class TestDocumentUpload:

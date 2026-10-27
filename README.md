@@ -2,7 +2,7 @@
 
 AI-powered company policy assistant. Employees ask natural-language questions about internal policies (leave, insurance, travel, reimbursements) and receive evidence-grounded answers with page-level citations.
 
-> **Status:** Phase 2 — PDF Ingestion and Page-Preserving Text Extraction. PDF ingestion, local atomic storage, and page-preserving text extraction are operational. RAG chunking, embeddings, hybrid retrieval, and answer generation will be added in subsequent phases.
+> **Status:** Phase 3 — Document Chunking and Metadata. PDF ingestion, page-preserving extraction, paragraph- and heading-aware chunking with deterministic page attribution, and chunk inspection UI are operational. Dense embeddings, vector search (Qdrant), BM25 hybrid retrieval, reranking, and LLM answer generation are planned for future phases.
 
 ---
 
@@ -22,18 +22,18 @@ AI-powered company policy assistant. Employees ask natural-language questions ab
 ```
 PolicyPilot/
 ├── frontend/           # Next.js + TypeScript + Tailwind CSS v3
-│   ├── app/            # App Router pages and layouts
+│   ├── app/            # App Router pages and layouts (Document Library, Chunks Viewer)
 │   └── ...
 ├── backend/            # Python / FastAPI
 │   ├── app/            # Application package
 │   │   ├── main.py     # FastAPI entry point & CORS configuration
-│   │   ├── config.py   # Environment-based settings
+│   │   ├── config.py   # Environment-based settings & chunking configuration
 │   │   ├── models/     # (reserved)
-│   │   ├── schemas/    # Pydantic schemas (DocumentMetadata, DocumentDetail, PageExtraction)
-│   │   ├── services/   # Business logic (pdf_service, storage_service)
+│   │   ├── schemas/    # Pydantic schemas (DocumentMetadata, DocumentDetail, DocumentChunk)
+│   │   ├── services/   # Business logic (pdf_service, storage_service, chunking_service)
 │   │   └── routers/    # API route modules (health, documents)
-│   ├── tests/          # pytest test suite (test_health, test_documents)
-│   ├── data/           # Local storage for PDFs and metadata (gitignored)
+│   ├── tests/          # pytest test suite (test_health, test_documents, test_chunking)
+│   ├── data/           # Local storage for PDFs, metadata, and chunks (gitignored)
 │   ├── requirements.txt
 │   └── requirements-dev.txt
 ├── docs/               # Architecture and design documentation
@@ -138,9 +138,10 @@ npm run build
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/documents/upload` | Ingest a PDF document (multipart/form-data) |
+| POST | `/api/documents/upload` | Ingest a PDF document (multipart/form-data), extract text, and chunk |
 | GET | `/api/documents` | List all ingested documents (metadata only) |
-| GET | `/api/documents/{document_id}` | Retrieve document details with page extractions |
+| GET | `/api/documents/{document_id}` | Retrieve document details with raw page extractions |
+| GET | `/api/documents/{document_id}/chunks` | Retrieve structured chunks with section and page attribution |
 | GET | `/api/documents/{document_id}/file` | Stream or download original stored PDF file |
 
 #### POST `/api/documents/upload` Example
@@ -149,28 +150,36 @@ npm run build
 curl -X POST -F "file=@leave_policy.pdf" http://localhost:8000/api/documents/upload
 ```
 
-**Response (201 Created):**
+#### GET `/api/documents/{document_id}/chunks` Example
+
+```bash
+curl http://localhost:8000/api/documents/72282962-7bde-404d-a821-f69d398c5c19/chunks
+```
+
+**Response (200 OK):**
 ```json
 {
   "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
   "filename": "leave_policy.pdf",
-  "content_type": "application/pdf",
-  "file_size_bytes": 1686,
-  "total_pages": 2,
-  "total_characters": 580,
-  "sha256_hash": "f615b13d23c4bf7e7fea1e58975e4cf3f4820fab1c89436e0992d6f8a4a8c549",
-  "ingestion_status": "completed",
-  "uploaded_at": "2026-10-27T16:49:16.916715+00:00",
-  "pages": [
+  "total_chunks": 2,
+  "chunks": [
     {
-      "page_number": 1,
-      "text": "PolicyPilot Leave Policy: Employees receive 20 days annual leave...\n",
-      "character_count": 277
+      "chunk_id": "3a0df4c5-0951-536d-b8d9-399d8b1e42fa",
+      "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
+      "chunk_index": 0,
+      "text": "1. Annual Leave Policy\nFull-time employees receive 20 days paid annual leave per calendar year. Leave accrues monthly...",
+      "section": "1. Annual Leave Policy",
+      "page_numbers": [1],
+      "character_count": 420
     },
     {
-      "page_number": 2,
-      "text": "Carry-over guidelines and application deadlines...\n",
-      "character_count": 303
+      "chunk_id": "8fbb1a90-7d0c-512c-982d-2f16a0fce647",
+      "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
+      "chunk_index": 1,
+      "text": "2. Leave Rollover Rules\nA maximum of 5 unused leave days may be carried over into the next calendar year...",
+      "section": "2. Leave Rollover Rules",
+      "page_numbers": [1, 2],
+      "character_count": 380
     }
   ]
 }
@@ -178,17 +187,53 @@ curl -X POST -F "file=@leave_policy.pdf" http://localhost:8000/api/documents/upl
 
 ---
 
+## Chunking Architecture
+
+The chunking engine (`backend/app/services/chunking_service.py`) prepares extracted PDF text for vector indexing and retrieval.
+
+### 1. Algorithm & Boundary Preference
+- **Unit of Measurement:** All sizes and overlaps are measured in **characters** (`character_count`), explicitly separated from token counts.
+- **Boundary Priority:**
+  1. Section / Heading boundaries (Markdown `#`, numbered `1.`, keyword `Section`, or `ALL-CAPS`).
+  2. Paragraph boundaries (`\n\n`).
+  3. Sentence boundaries (`.`, `?`, `!`).
+  4. Word / character boundaries (strict fallback for oversized blocks exceeding target size).
+- **Infinite Loop Protection:** Sliding window advances by at least one atomic segment per iteration (`start_idx = max(start_idx + 1, back_idx + 1)`), mathematically precluding infinite loops even with short text or large overlaps.
+- **No Empty Chunks:** Strips empty or whitespace-only chunks prior to returning.
+
+### 2. Heading-Aware Section Detection
+- Detects headings using structured regex:
+  - Markdown headings: `# Heading`, `## Subheading`
+  - Numbered headings: `1. Introduction`, `2.1 Policy Scope`
+  - Keyword headings: `Section 3: Benefits`, `Article IV`, `Chapter 1`
+  - ALL-CAPS single-line headings: `HOLIDAY SCHEDULE`
+- **Limitations:** Heuristic detection operates on plain extracted text without font-size or typography styling signals. Content with non-standard formatting falls back to `section: null` without fabricating phantom sections.
+
+### 3. Page Attribution Rules
+- Every chunk retains a sorted, deduplicated list of 1-based page numbers (`page_numbers: list[int]`) that contributed text to that chunk.
+- Chunks spanning multiple pages explicitly record all contributing pages (e.g. `[1, 2]`), enabling accurate multi-page source citations during subsequent RAG answer generation.
+
+### 4. Deterministic Chunk Identity
+- Chunk IDs are generated using UUIDv5 based on document identity, chunk index, and SHA-256 of the chunk text:
+  ```python
+  uuid.uuid5(uuid.NAMESPACE_OID, f"{document_id}:{chunk_index}:{sha256(text)}")
+  ```
+- Guaranteed to be reproducible across runs, processes, and reloads for identical documents and settings.
+
+---
+
 ## Storage Architecture
 
-- **Uploaded PDFs**: Stored at `backend/data/documents/{document_id}.pdf` using server-generated UUIDs to prevent user path traversal.
-- **Extracted Metadata**: Persisted atomically as JSON at `backend/data/metadata/{document_id}.json`.
-- **Git Exclusions**: Both `backend/data/` and all PDF files are excluded in `.gitignore` to prevent committing document data.
+- **Uploaded PDFs**: Stored at `backend/data/documents/{document_id}.pdf`.
+- **Extraction Metadata**: Persisted atomically as JSON at `backend/data/metadata/{document_id}.json`.
+- **Structured Chunks**: Persisted atomically as JSON at `backend/data/chunks/{document_id}.json`.
+- **Git Exclusions**: `backend/data/`, `data/`, and all `*.pdf` files are excluded in `.gitignore` to prevent committing document or chunk data.
 
 ---
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for all available configuration. Key variables:
+See [`.env.example`](.env.example) for configuration options:
 
 | Variable | Default | Used by | Description |
 |----------|---------|---------|-------------|
@@ -196,6 +241,9 @@ See [`.env.example`](.env.example) for all available configuration. Key variable
 | `DEBUG` | `false` | Backend | Enable verbose debug logging |
 | `DOCUMENTS_DIR` | `data/documents` | Backend | Directory for storing raw PDF files |
 | `METADATA_DIR` | `data/metadata` | Backend | Directory for storing extraction JSON |
+| `CHUNKS_DIR` | `data/chunks` | Backend | Directory for storing chunk JSON files |
+| `TARGET_CHUNK_SIZE` | `1000` | Backend | Target chunk size in characters (must be > 0) |
+| `CHUNK_OVERLAP` | `150` | Backend | Chunk overlap in characters (must be < TARGET_CHUNK_SIZE) |
 | `MAX_UPLOAD_SIZE_BYTES` | `10485760` | Backend | Maximum upload size (10 MB) |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend | Backend API endpoint URL |
 
@@ -203,15 +251,16 @@ See [`.env.example`](.env.example) for all available configuration. Key variable
 
 ## Known Limitations
 
-- **OCR Not Supported**: Scanned, image-only PDFs will produce 0 extracted characters. Each page is still preserved with its 1-based page number, and the status reflects `completed (no extractable text found; OCR not supported in Phase 2)`.
-- **Password-Protected PDFs**: Encrypted PDFs are rejected with HTTP 400 (`Password-protected or encrypted PDFs are not supported.`).
-- **Scope Restriction**: Phase 2 strictly implements document ingestion and text extraction. Chunking, vector embeddings, hybrid search, and question answering will be introduced in subsequent phases.
+- **OCR Not Supported**: Scanned, image-only PDFs produce 0 extracted characters. Pages are preserved with `text=""` and chunking safely returns an empty chunk list.
+- **Password-Protected PDFs**: Encrypted PDFs are rejected with HTTP 400.
+- **Heading Recognition**: Plain-text regex heuristics are used; styling-based headings lacking structural markers fall back to `null`.
+- **Retrieval Scope**: Phase 3 strictly implements document chunking and metadata. Embeddings (Qdrant), BM25 hybrid search, reranking, and LLM answer generation will be introduced in subsequent phases.
 
 ---
 
 ## Documentation
 
-- [Architecture Specification](docs/architecture.md) — system design, implemented vs. planned features, and open decisions.
+- [Architecture Specification](docs/architecture.md) — detailed system design, implemented vs. planned features, and open decisions.
 
 ---
 
