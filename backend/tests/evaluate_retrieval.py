@@ -13,8 +13,13 @@ Metrics measured:
 """
 
 import math
+import sys
 import uuid
+from pathlib import Path
 from typing import Any
+
+# Ensure backend root is in sys.path for standalone script execution
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from qdrant_client import QdrantClient
 

@@ -2,7 +2,7 @@
 
 AI-powered company policy assistant. Employees ask natural-language questions about internal policies (leave, insurance, travel, reimbursements) and receive evidence-grounded answers with page-level citations.
 
-> **Status:** Phase 6 — Cross-Encoder Reranking and Retrieval Quality Tuning. PDF ingestion, page-preserving extraction, paragraph/heading-aware chunking, dense vector embeddings (FastEmbed), vector storage (Qdrant), Okapi BM25 keyword search, Reciprocal Rank Fusion (RRF) hybrid retrieval, and CPU-efficient Cross-Encoder Reranking (`FlashRank` ONNX) are operational with 3-mode frontend controls. LLM answer generation follows in Phase 7.
+> **Status:** Phase 7 — Grounded LLM Question Answering, Evidence-Based Citations, and Source Traceability. PDF ingestion, page-preserving extraction, paragraph/heading-aware chunking, dense vector embeddings (FastEmbed), vector storage (Qdrant), Okapi BM25 keyword search, Reciprocal Rank Fusion (RRF) hybrid retrieval, CPU-efficient Cross-Encoder Reranking (`FlashRank` ONNX), and grounded question answering with server-side citation validation via Google Gemini (`gemini-2.5-flash`) are fully operational with Next.js frontend UI.
 
 ---
 
@@ -22,17 +22,17 @@ AI-powered company policy assistant. Employees ask natural-language questions ab
 ```
 PolicyPilot/
 ├── frontend/           # Next.js + TypeScript + Tailwind CSS v3
-│   ├── app/            # App Router pages and layouts (Library, Chunks Viewer, 3 Search Modes)
+│   ├── app/            # App Router pages and layouts (Library, Chunks, Search Modes, Ask QA)
 │   └── ...
 ├── backend/            # Python / FastAPI
 │   ├── app/            # Application package
 │   │   ├── main.py     # FastAPI entry point, lifespan startup sync & CORS
-│   │   ├── config.py   # Settings (chunking, Qdrant, embeddings, BM25, RRF, reranker)
+│   │   ├── config.py   # Settings (chunking, Qdrant, embeddings, BM25, RRF, reranker, LLM/RAG)
 │   │   ├── models/     # (reserved)
-│   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, HybridSearch, RerankSearch, Index)
-│   │   ├── services/   # Business logic (pdf, storage, chunking, embedding, vector, indexing, bm25, hybrid, reranker)
-│   │   └── routers/    # API routes (health, documents, search)
-│   ├── tests/          # pytest test suite & retrieval evaluation (94 tests across 6 modules)
+│   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, HybridSearch, RerankSearch, Index, QA)
+│   │   ├── services/   # Business logic (pdf, storage, chunking, embedding, vector, indexing, bm25, hybrid, reranker, llm, rag)
+│   │   └── routers/    # API routes (health, documents, search, qa)
+│   ├── tests/          # pytest test suite & retrieval evaluation (111 tests across 7 modules)
 │   ├── data/           # Local storage for PDFs, metadata, chunks, and Qdrant (gitignored)
 │   ├── requirements.txt
 │   └── requirements-dev.txt
@@ -88,7 +88,7 @@ cd backend
 # Start the development server (auto-reload)
 .venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
 
-# Run automated tests (94 tests)
+# Run automated tests (111 tests)
 .venv\Scripts\pytest.exe -v
 
 # Run retrieval quality evaluation fixture
@@ -283,6 +283,13 @@ See [`.env.example`](.env.example) for all configuration options:
 | `RERANKER_MODEL` | `ms-marco-TinyBERT-L-2-v2` | Backend | Pinned cross-encoder model identifier |
 | `RERANK_CANDIDATE_LIMIT` | `20` | Backend | Top RRF candidate count evaluated by reranker |
 | `RERANK_BATCH_SIZE` | `16` | Backend | Batch size for cross-encoder inference |
+| `GEMINI_API_KEY` | `None` | Backend | Google Gemini API key (never expose to frontend) |
+| `LLM_PROVIDER` | `gemini` | Backend | LLM provider (`gemini` or `mock`) |
+| `LLM_MODEL` | `gemini-2.5-flash` | Backend | Configured Gemini generation model |
+| `RAG_MAX_EVIDENCE_CHUNKS` | `5` | Backend | Maximum retrieved passages passed to LLM context |
+| `RAG_CONTEXT_CHAR_BUDGET` | `6000` | Backend | Maximum character budget for context window |
+| `RAG_ABSTENTION_SCORE_THRESHOLD` | `0.00001` | Backend | Rerank score threshold below which system abstains |
+| `RAG_REQUEST_TIMEOUT_SECONDS` | `30.0` | Backend | Upstream LLM request timeout |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend | Backend API endpoint URL |
 
 ---
@@ -294,8 +301,8 @@ See [`.env.example`](.env.example) for all configuration options:
 - **Phase 3: Page-aware chunking and metadata** — ✅ Complete (released)
 - **Phase 4: Embeddings and vector search** — ✅ Complete (released)
 - **Phase 5: BM25 and hybrid retrieval with RRF** — ✅ Complete (released)
-- **Phase 6: Reranking and retrieval tuning** — ✅ Complete (current phase: 6/8, 75%)
-- **Phase 7: Grounded LLM answers and citations** — ⏳ Not started
+- **Phase 6: Reranking and retrieval tuning** — ✅ Complete (released)
+- **Phase 7: Grounded LLM answers and citations** — ✅ Complete (current phase: 7/8, 87.5%)
 - **Phase 8: RAG evaluation, final hardening, and deployment** — ⏳ Not started
 
 ---
@@ -303,7 +310,7 @@ See [`.env.example`](.env.example) for all configuration options:
 ## Known Limitations
 
 - **OCR Not Supported**: Scanned, image-only PDFs produce 0 extracted characters. Pages are preserved with `text=""` and indexing safely returns 0 indexed chunks.
-- **Passage Retrieval Only**: Phase 6 returns retrieved and reranked policy passages with cross-encoder relevance scores and provenance. Natural-language LLM answer generation with citation verification follows in Phase 7.
+- **Provider Credentials**: When `GEMINI_API_KEY` is not set, `POST /api/ask` returns an explicit HTTP 503 Service Unavailable without mock fallback. Automated tests use deterministic `MockLLMProvider`.
 - **Heading Recognition**: Plain-text regex heuristics are used; styling-based headings lacking structural markers fall back to `null`.
 
 ---

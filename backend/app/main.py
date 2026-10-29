@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import documents, health, search
+from app.routers import documents, health, qa, search
 from app.services.bm25_service import bm25_service
 from app.services.storage_service import storage_service
 from app.services.vector_service import reset_vector_service
@@ -41,3 +41,4 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(documents.router)
 app.include_router(search.router)
+app.include_router(qa.router)

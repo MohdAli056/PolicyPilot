@@ -71,6 +71,46 @@ interface IndexState {
   message?: string;
 }
 
+interface CitationItem {
+  source_id: string;
+  document_id: string;
+  filename: string;
+  chunk_id: string;
+  page_numbers: number[];
+  section: string | null;
+  excerpt: string;
+}
+
+interface SourceItem {
+  source_id: string;
+  document_id: string;
+  filename: string;
+  chunk_id: string;
+  chunk_index: number;
+  page_numbers: number[];
+  section: string | null;
+  text: string;
+  rerank_score: number;
+  rerank_rank: number;
+  rrf_score: number;
+  retrievers: string[];
+}
+
+interface AskResponseData {
+  question: string;
+  answer: string;
+  is_abstention: boolean;
+  citations: CitationItem[];
+  sources: SourceItem[];
+  model: string;
+  timing_ms?: {
+    retrieval_ms?: number;
+    rerank_ms?: number;
+    llm_ms?: number;
+    total_ms?: number;
+  };
+}
+
 export default function Home() {
   // Backend health state
   const [healthStatus, setHealthStatus] = useState<HealthStatus>("loading");
@@ -108,6 +148,15 @@ export default function Home() {
   const [searching, setSearching] = useState<boolean>(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [executedQuery, setExecutedQuery] = useState<string>("");
+
+  // Question Answering (RAG) state - Phase 7
+  const [qaQuestion, setQaQuestion] = useState<string>("");
+  const [qaLimit, setQaLimit] = useState<number>(5);
+  const [asking, setAsking] = useState<boolean>(false);
+  const [qaError, setQaError] = useState<string | null>(null);
+  const [qaResponse, setQaResponse] = useState<AskResponseData | null>(null);
+  const [selectedCitationId, setSelectedCitationId] = useState<string | null>(null);
+  const [showAllSources, setShowAllSources] = useState<boolean>(false);
 
   // Document Indexing state
   const [indexingMap, setIndexingMap] = useState<Record<string, IndexState>>({});
@@ -364,6 +413,85 @@ export default function Home() {
     }
   };
 
+  // Handle Question Answering submission (Phase 7 RAG)
+  const handleAsk = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = qaQuestion.trim();
+    if (!trimmed || asking) return;
+
+    setAsking(true);
+    setQaError(null);
+    setQaResponse(null);
+    setSelectedCitationId(null);
+
+    try {
+      const res = await fetch(`${API_URL}/api/ask`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: trimmed,
+          limit: qaLimit,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || `Question answering failed with HTTP ${res.status}`);
+      }
+
+      setQaResponse(data);
+    } catch (err) {
+      setQaError(err instanceof Error ? err.message : "Failed to answer question.");
+      setQaResponse(null);
+    } finally {
+      setAsking(false);
+    }
+  };
+
+  const handleClearQA = () => {
+    setQaQuestion("");
+    setQaResponse(null);
+    setQaError(null);
+    setSelectedCitationId(null);
+  };
+
+  // Safely renders answer text with clickable interactive citation pills
+  const renderAnswerWithCitations = (
+    answerText: string,
+    onCitationClick: (sourceId: string) => void
+  ) => {
+    const parts = answerText.split(/(\[S\d+\])/g);
+    return (
+      <span>
+        {parts.map((part, idx) => {
+          const match = part.match(/^\[(S\d+)\]$/);
+          if (match) {
+            const sourceId = match[1];
+            const isSelected = selectedCitationId === sourceId;
+            return (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => onCitationClick(sourceId)}
+                className={`inline-flex items-center px-1.5 py-0.2 mx-0.5 rounded text-[11px] font-mono font-bold transition-all ${
+                  isSelected
+                    ? "bg-purple-600 text-white ring-2 ring-purple-400"
+                    : "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-800"
+                }`}
+                title={`View verified citation details for [${sourceId}]`}
+              >
+                [{sourceId}]
+              </button>
+            );
+          }
+          return <span key={idx}>{part}</span>;
+        })}
+      </span>
+    );
+  };
+
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-5xl mx-auto space-y-8">
@@ -373,7 +501,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 6: Cross-Encoder Reranking & Retrieval Quality Tuning
+                AI-powered company policy assistant — Phase 7: Grounded LLM Answers & Verifiable Citations
               </p>
             </div>
 
@@ -406,6 +534,256 @@ export default function Home() {
             </p>
           )}
         </header>
+
+        {/* Grounded Question Answering Section (Phase 7 RAG) */}
+        <section
+          aria-labelledby="qa-heading"
+          className="bg-white dark:bg-gray-900 border border-blue-200/70 dark:border-blue-900/50 rounded-lg p-6 shadow-sm space-y-5"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h2
+                id="qa-heading"
+                className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2"
+              >
+                <span>Ask PolicyPilot</span>
+                <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                  Grounded RAG
+                </span>
+                <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
+                  Evidence Citations
+                </span>
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Ask natural-language questions about company policies. Answers are synthesized strictly from retrieved evidence with verified page citations.
+              </p>
+            </div>
+          </div>
+
+          {/* Question Form */}
+          <form onSubmit={handleAsk} className="space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <input
+                id="qa-question-input"
+                type="text"
+                placeholder="Ask a question about internal company policies (e.g., How many days of annual leave do I get?)..."
+                value={qaQuestion}
+                onChange={(e) => {
+                  setQaQuestion(e.target.value);
+                  if (qaResponse !== null) {
+                    setQaResponse(null);
+                  }
+                }}
+                disabled={asking}
+                className="flex-1 text-xs px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  id="qa-limit-select"
+                  value={qaLimit}
+                  onChange={(e) => setQaLimit(Number(e.target.value))}
+                  disabled={asking}
+                  className="text-xs px-2.5 py-2.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value={3}>Top 3 Evidence</option>
+                  <option value={5}>Top 5 Evidence</option>
+                  <option value={10}>Top 10 Evidence</option>
+                </select>
+                <button
+                  id="qa-submit-button"
+                  type="submit"
+                  disabled={!qaQuestion.trim() || asking}
+                  className="px-5 py-2.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md whitespace-nowrap transition-colors flex items-center gap-2"
+                >
+                  {asking ? (
+                    <>
+                      <span className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Synthesizing…
+                    </>
+                  ) : (
+                    "Ask PolicyPilot"
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {qaError && (
+              <div
+                id="qa-error-message"
+                className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 p-3 rounded"
+              >
+                <strong>Question Answering Error:</strong> {qaError}
+              </div>
+            )}
+          </form>
+
+          {/* QA Results Display */}
+          {qaResponse !== null && (
+            <div
+              id="qa-results-container"
+              className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-4"
+            >
+              <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+                <span>
+                  Question: &ldquo;<strong className="text-gray-900 dark:text-gray-100">{qaResponse.question}</strong>&rdquo;
+                </span>
+                <button
+                  id="qa-clear-button"
+                  onClick={handleClearQA}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
+                >
+                  Clear answer
+                </button>
+              </div>
+
+              {/* Abstention State */}
+              {qaResponse.is_abstention ? (
+                <div
+                  id="qa-abstention-notice"
+                  className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg p-4 space-y-2 text-xs"
+                >
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-semibold">
+                    <span>⚠️</span>
+                    <span>Insufficient Evidence in Uploaded Policies</span>
+                  </div>
+                  <p className="text-amber-900/90 dark:text-amber-200/90 leading-relaxed font-medium">
+                    {qaResponse.answer}
+                  </p>
+                  <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80">
+                    The uploaded policy documents do not establish an answer to this question. Please ensure relevant policy PDFs are uploaded and indexed.
+                  </p>
+                </div>
+              ) : (
+                /* Grounded Answer Card */
+                <div
+                  id="qa-answer-card"
+                  className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-5 shadow-xs space-y-4"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-semibold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                      Grounded Answer
+                    </span>
+                    <span className="text-[11px] text-gray-500 dark:text-gray-400 font-mono">
+                      Model: {qaResponse.model}
+                      {qaResponse.timing_ms?.total_ms !== undefined && (
+                        <> • {qaResponse.timing_ms.total_ms}ms total</>
+                      )}
+                    </span>
+                  </div>
+
+                  {/* Answer Text with Interactive Citation Pills */}
+                  <div
+                    id="qa-answer-text"
+                    className="text-sm leading-relaxed text-gray-800 dark:text-gray-200 border-l-2 border-emerald-500 pl-3 py-1"
+                  >
+                    {renderAnswerWithCitations(qaResponse.answer, (srcId) => {
+                      setSelectedCitationId((prev) => (prev === srcId ? null : srcId));
+                    })}
+                  </div>
+
+                  {/* Verified Citations List */}
+                  {qaResponse.citations.length > 0 && (
+                    <div id="qa-citations-section" className="space-y-2.5 pt-2">
+                      <h3 className="text-xs font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        <span>Supporting Citations ({qaResponse.citations.length})</span>
+                        <span className="text-[10px] font-normal text-gray-500">
+                          (Click [S#] badges above to highlight citations)
+                        </span>
+                      </h3>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {qaResponse.citations.map((c) => {
+                          const isHighlighted = selectedCitationId === c.source_id;
+                          return (
+                            <div
+                              key={c.source_id}
+                              id={`citation-${c.source_id}`}
+                              className={`text-xs p-3 rounded-lg border transition-all ${
+                                isHighlighted
+                                  ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/30 ring-1 ring-purple-400"
+                                  : "border-gray-200 dark:border-gray-800 bg-gray-50/60 dark:bg-gray-800/40"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-gray-200/60 dark:border-gray-700/50">
+                                <div className="flex items-center gap-2">
+                                  <span className="px-1.5 py-0.5 rounded font-mono font-bold bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 text-[11px]">
+                                    [{c.source_id}]
+                                  </span>
+                                  <span className="font-medium text-gray-900 dark:text-gray-100">
+                                    {c.filename}
+                                  </span>
+                                  <span className="text-[11px] text-gray-500 dark:text-gray-400">
+                                    (Page{c.page_numbers.length > 1 ? "s" : ""} {c.page_numbers.join(", ")})
+                                  </span>
+                                  {c.section && (
+                                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
+                                      {c.section}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => openDetail(c.document_id)}
+                                    className="text-[11px] text-blue-600 hover:text-blue-700 dark:text-blue-400 underline font-medium"
+                                  >
+                                    Inspect Document
+                                  </button>
+                                  <a
+                                    href={`${API_URL}/api/documents/${c.document_id}/file`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 underline"
+                                  >
+                                    View PDF ↗
+                                  </a>
+                                </div>
+                              </div>
+                              <blockquote className="mt-2 text-[11px] text-gray-600 dark:text-gray-300 italic pl-2 border-l-2 border-gray-300 dark:border-gray-600">
+                                &ldquo;{c.excerpt}&rdquo;
+                              </blockquote>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expandable Retrieved Sources Context */}
+                  {qaResponse.sources.length > 0 && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllSources((prev) => !prev)}
+                        className="text-[11px] text-gray-500 hover:text-gray-700 dark:text-gray-400 flex items-center gap-1 font-medium underline"
+                      >
+                        <span>{showAllSources ? "▼ Hide" : "▶ View"} All Supplied Evidence Passages ({qaResponse.sources.length})</span>
+                      </button>
+                      {showAllSources && (
+                        <div className="mt-2 space-y-2 border border-gray-200 dark:border-gray-800 rounded-lg p-3 bg-gray-50/50 dark:bg-gray-900/50">
+                          {qaResponse.sources.map((s) => (
+                            <div
+                              key={s.chunk_id}
+                              className="text-[11px] border-b border-gray-200 dark:border-gray-800 pb-2 last:border-b-0"
+                            >
+                              <div className="flex items-center justify-between text-gray-600 dark:text-gray-400 font-mono text-[10px]">
+                                <span>[{s.source_id}] {s.filename} (p. {s.page_numbers.join(", ")})</span>
+                                <span>Rerank Score: {s.rerank_score.toFixed(6)} | RRF: {s.rrf_score.toFixed(6)}</span>
+                              </div>
+                              <p className="text-gray-800 dark:text-gray-200 mt-1 line-clamp-3">
+                                {s.text}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         {/* Search Section (Reranked, Hybrid, Semantic) */}
         <section

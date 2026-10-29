@@ -8,9 +8,13 @@ from app.schemas.document import (
     PageExtraction,
 )
 from app.schemas.index import IndexDocumentResponse
+from app.schemas.qa import AskRequest, AskResponse, CitationItem, SourceItem
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 
 __all__ = [
+    "AskRequest",
+    "AskResponse",
+    "CitationItem",
     "DocumentChunk",
     "DocumentChunkListResponse",
     "DocumentDetail",
@@ -21,4 +25,5 @@ __all__ = [
     "SearchRequest",
     "SearchResponse",
     "SearchResultItem",
+    "SourceItem",
 ]

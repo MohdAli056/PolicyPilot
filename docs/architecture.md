@@ -1,6 +1,6 @@
 # PolicyPilot Architecture
 
-> Phase 6 — Cross-Encoder Reranking and Retrieval Quality Tuning. Last updated: 2026-10-29.
+> Phase 7 — Grounded LLM Question Answering, Evidence-Based Citations, and Source Traceability. Last updated: 2026-10-29.
 
 This document describes the current architecture of PolicyPilot and outlines where future capabilities will be integrated. Sections are explicitly marked **[IMPLEMENTED]** or **[PLANNED]** to distinguish working code from future design intent.
 
@@ -16,13 +16,15 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          Frontend (Next.js 16)                          │  ← User interface (Library, Chunks, 3 Search Modes)
+│                          Frontend (Next.js 16)                          │  ← User interface (Library, Chunks, 3 Search Modes, Ask QA)
 ├─────────────────────────────────────────────────────────────────────────┤
 │                          Backend  (FastAPI)                             │  ← API, storage & multi-stage retrieval pipeline
 ├──────────────┬───────────────┬────────────┬────────────┬────────────────┤
 │ PDF Ingest   │ Chunking      │ Qdrant     │ BM25 & RRF │ Cross-Encoder  │  ← Ingest, Chunks, Vector, BM25, & Rerank [IMPLEMENTED]
-│ & Extraction │ & Metadata    │ Vector     │ Hybrid     │ Reranker       │  ← Grounded LLM Answers & Citations [PLANNED]
-└──────────────┴───────────────┴────────────┴────────────┴────────────────┘
+│ & Extraction │ & Metadata    │ Vector     │ Hybrid     │ Reranker       │
+├──────────────┴───────────────┴────────────┴────────────┴────────────────┤
+│  RAG Orchestration, LLM Grounding & Server-Side Citations [IMPLEMENTED]  │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -43,6 +45,10 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | Hybrid search input & fused results display with green `RRF: ...` scores & ranks | ✅ Implemented |
 | Semantic search input & cosine similarity results display | ✅ Implemented |
 | Instant clearing of stale results when switching search modes or editing queries | ✅ Implemented |
+| Ask PolicyPilot natural language question answering card (`POST /api/ask`) | ✅ Implemented |
+| Grounded answer rendering with interactive citation pills linked to sources | ✅ Implemented |
+| Abstention notice rendering when policies lack evidence | ✅ Implemented |
+| Expandable retrieved evidence sources viewer with page and chunk metadata | ✅ Implemented |
 | Document indexing action trigger (`POST /api/documents/{id}/index`) | ✅ Implemented |
 | Stream / open original PDF (`GET /api/documents/{id}/file`) | ✅ Implemented |
 | Configurable backend URL (`NEXT_PUBLIC_API_URL`) | ✅ Implemented |
@@ -51,8 +57,6 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 **Stack:** Next.js 16, React 19, TypeScript, Tailwind CSS v3.
 
 **Planned additions (later phases):**
-- Natural language answer generation with grounded evidence synthesis (Phase 7).
-- Highlightable page-level citation links in PDF viewer (Phase 7).
 - RAG evaluation dashboard and metric tracking (Phase 8).
 
 ---
@@ -204,27 +208,72 @@ Metrics calculated across all 5 queries comparing dense vector search, BM25, Hyb
 
 ---
 
-## 9. Testing and Verification — [IMPLEMENTED]
+## 9. Grounded LLM Question Answering & Citation Validation — [IMPLEMENTED]
 
-- **Backend Tests:** 94 automated pytest tests covering:
+Implemented in `backend/app/services/llm_service.py`, `backend/app/services/rag_service.py`, and `backend/app/routers/qa.py`.
+
+### 9.1 End-to-End Pipeline
+For each question received at `POST /api/ask`:
+1. **Candidate Retrieval & Reranking:** Reuses `RerankerService.search_and_rerank` to run hybrid retrieval (FastEmbed vector + Okapi BM25 with RRF fusion) and FlashRank cross-encoder reranking.
+2. **Abstention on Empty/Irrelevant Corpus:** If 0 candidates are returned or top candidate rerank scores fall below `rag_abstention_score_threshold` (0.00001), the service immediately abstains without executing an LLM call.
+3. **Context Selection & Character Budgeting:** Top $K$ passages (default 5, configurable up to 10) are bounded within `rag_context_char_budget` (default 6,000 characters). Duplicate chunks are removed, and passages are prefixed with stable source tags (`[S1]`, `[S2]`).
+4. **LLM Generation:** The context and system instructions are dispatched to the configured LLM provider (`GeminiLLMProvider` using official `google-genai` SDK or `MockLLMProvider` for deterministic testing).
+5. **Server-Side Citation Validation:**
+   - Raw model responses cite sources using bracketed tags `[S1]`, `[S2]`.
+   - The server resolves source tags against the actual retrieved chunks to extract: `document_id`, `filename`, `chunk_id`, 1-based `page_numbers`, `section`, and `excerpt`.
+   - Any hallucinated source tags (e.g., `[S99]`) are stripped from the response text and omitted from citations. The LLM is never trusted to fabricate page numbers or document metadata.
+   - If the model indicates insufficient evidence or all citations are invalid, the answer is flagged with `is_abstention=True`.
+
+### 9.2 Grounding System Instructions
+System instructions enforce:
+- Direct, fact-based answers derived strictly from provided evidence.
+- No fabricated figures, deadlines, eligibility criteria, or policy clauses.
+- Treatment of retrieved policy text as untrusted reference material to prevent prompt injection attempts.
+- Explicit abstention when evidence does not establish the answer.
+
+### 9.3 LLM Provider Abstraction
+- `BaseLLMProvider(ABC)`:
+  - `model_name -> str`
+  - `generate(prompt: str, system_instruction: str) -> str`
+- `GeminiLLMProvider`: Integrates with the official `google-genai` SDK (`gemini-2.5-flash`), with thread-safe lazy initialization, timeout configuration, and sanitized error masking. Raises `LLMAuthenticationError` (mapped to HTTP 503) if `GEMINI_API_KEY` is not configured.
+- `MockLLMProvider`: Deterministic offline provider for unit and regression testing, with flags for simulating timeouts, rate limits, missing authentication, malformed answers, and hallucinated citations.
+
+---
+
+## 10. Testing and Verification — [IMPLEMENTED]
+
+- **Backend Tests:** 111 automated pytest tests covering:
   - Health check & baseline endpoints (7 tests).
   - Document upload, extraction, corruption handling, and security (13 tests).
   - Paragraph/heading chunking, page attribution, and settings validation (18 tests).
   - Embedding generation, Qdrant collection, and semantic search (19 tests).
   - BM25 tokenization, exact matching, RRF formula, and hybrid search (20 tests).
-  - Cross-encoder reranker unit tests: descending scores, tie-breaking by chunk ID, metadata preservation, empty candidate handling, candidate limit bounding, 1-to-1 mapping, initialization failure, mock provider overrides, and honest failure simulation (10 tests).
-  - Cross-encoder integration tests: `POST /api/search/rerank` API execution, empty corpus, 422 input validation, honest 503 error handling, backward compatibility of `/api/search`, `/api/search/keyword`, and `/api/search/hybrid` (6 tests).
-  - Retrieval quality evaluation benchmark validation (1 test).
-- **Code Quality:** Ruff linter & formatter for Python (33 files formatted, 0 errors); ESLint and TypeScript for Next.js (0 errors).
-- **Browser Verification:** Real end-to-end browser verification of document upload, indexing, and comparison across all 3 search modes (Reranked, Hybrid, Semantic) with distinct score badges.
+  - Cross-encoder reranker unit & integration tests (17 tests).
+  - RAG QA, citation validation, context bounding, prompt injection mitigation, and API error mapping (17 tests).
+- **Quality Benchmark:** `evaluate_retrieval.py` confirms 1.0000 MRR and Recall across 4 retrieval stages.
+- **End-to-End Verification:** `backend/tests/verify_phase7_end_to_end.py` executes all real retrieval components:
+  - Real PDF extraction via PyMuPDF.
+  - Real paragraph-aware chunking.
+  - Real BGE-small-en embeddings via FastEmbed.
+  - Real in-memory Qdrant vectors.
+  - Real BM25 inverted index.
+  - Real FlashRank cross-encoder reranking.
+  - Multi-page citation attribution with 1-based page numbers.
+  - Abstention on absent facts.
+  - Prompt injection neutralization.
+  - 503 response without API key.
+  - Backward compatibility of `/api/search`, `/api/search/keyword`, `/api/search/hybrid`, and `/api/search/rerank`.
+- **Browser Verification:** Real end-to-end browser verification of document indexing, question submission, answer display with interactive citation badges, evidence inspector, and search mode stability.
+- **Code Quality:** Ruff linter & formatter for Python (39 files checked and formatted, 0 errors); ESLint and TypeScript for Next.js (0 errors).
 
 ---
 
-## 10. Open Decisions
+## 11. Open Decisions
 
 | Decision | Notes |
 |----------|-------|
-| LLM Provider for Phase 7 | Local (e.g. Ollama / Llama.cpp) vs. Cloud API (e.g. OpenAI / Anthropic / Gemini) to be selected in Phase 7. |
-| Citation Highlighting | PDF.js or native Canvas overlay for highlightable page-level citations in Phase 7. |
-| Production Vector Database | Local filesystem & embedded Qdrant used for Phase 6; Qdrant Cloud/Cluster & S3 object storage suitable for cloud production. |
+| Production LLM Configuration | Gemini 2.5 Flash via `google-genai` SDK is implemented. Local LLM alternatives (e.g. Ollama) can implement `BaseLLMProvider`. |
+| Cloud Production Storage | Local filesystem & embedded Qdrant used for development; Qdrant Cloud and S3-compatible storage suitable for scaled deployment. |
+| Evaluation Framework (Phase 8) | RAG evaluation metrics (Ragas/TruLens style context relevance, groundedness, answer relevance) will be implemented in Phase 8. |
 | OCR Support | Tesseract or Cloud OCR can be plugged into `pdf_service.py` if scanned document volume requires it. |
+

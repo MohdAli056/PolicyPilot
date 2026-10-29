@@ -59,6 +59,15 @@ class Settings(BaseSettings):
     rerank_candidate_limit: int = 20
     rerank_batch_size: int = 16
 
+    # LLM Provider and RAG Orchestration configuration
+    gemini_api_key: str | None = None
+    llm_provider: str = "gemini"
+    llm_model: str = "gemini-2.5-flash"
+    rag_max_evidence_chunks: int = 5
+    rag_context_char_budget: int = 6000
+    rag_abstention_score_threshold: float = 0.00001
+    rag_request_timeout_seconds: float = 30.0
+
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         """Validate chunking, vector, and search constraints."""
@@ -125,6 +134,27 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"reranker_provider '{self.reranker_provider}' is not supported. "
                 f"Choose from: {', '.join(valid_rerankers)}"
+            )
+        valid_llm_providers = ("gemini", "mock")
+        if self.llm_provider.lower() not in valid_llm_providers:
+            raise ValueError(
+                f"llm_provider '{self.llm_provider}' is not supported. "
+                f"Choose from: {', '.join(valid_llm_providers)}"
+            )
+        if self.rag_max_evidence_chunks <= 0:
+            raise ValueError(
+                f"rag_max_evidence_chunks must be positive, "
+                f"got {self.rag_max_evidence_chunks}"
+            )
+        if self.rag_context_char_budget <= 0:
+            raise ValueError(
+                f"rag_context_char_budget must be positive, "
+                f"got {self.rag_context_char_budget}"
+            )
+        if self.rag_request_timeout_seconds <= 0:
+            raise ValueError(
+                f"rag_request_timeout_seconds must be positive, "
+                f"got {self.rag_request_timeout_seconds}"
             )
         return self
 
