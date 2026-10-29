@@ -3,6 +3,7 @@
 from typing import Optional
 
 from app.schemas.index import IndexDocumentResponse
+from app.services.bm25_service import BM25Service, bm25_service
 from app.services.embedding_service import BaseEmbeddingProvider, get_embedding_provider
 from app.services.storage_service import storage_service
 from app.services.vector_service import VectorService, get_vector_service
@@ -15,9 +16,11 @@ class IndexingService:
         self,
         embedding_provider: Optional[BaseEmbeddingProvider] = None,
         vector_service: Optional[VectorService] = None,
+        bm25_retriever: Optional[BM25Service] = None,
     ):
         self._custom_embedding_provider = embedding_provider
         self._custom_vector_service = vector_service
+        self._custom_bm25_service = bm25_retriever
 
     @property
     def embedding_provider(self) -> BaseEmbeddingProvider:
@@ -26,6 +29,10 @@ class IndexingService:
     @property
     def vector_service(self) -> VectorService:
         return self._custom_vector_service or get_vector_service()
+
+    @property
+    def bm25_retriever(self) -> BM25Service:
+        return self._custom_bm25_service or bm25_service
 
     def index_document(self, document_id: str) -> IndexDocumentResponse:
         """Embed and index all chunks for a document into Qdrant.
@@ -70,11 +77,21 @@ class IndexingService:
             filename=doc.filename,
         )
 
+        # 6. Synchronize keyword search index
+        self.bm25_retriever.index_document_chunks(
+            document_id=document_id,
+            filename=doc.filename,
+            chunks=chunks,
+        )
+
         return IndexDocumentResponse(
             document_id=document_id,
             indexed_chunks=indexed_count,
             status="completed",
-            message=f"Successfully indexed {indexed_count} chunks into vector store",
+            message=(
+                f"Successfully indexed {indexed_count} chunks into "
+                "vector and keyword stores"
+            ),
         )
 
 

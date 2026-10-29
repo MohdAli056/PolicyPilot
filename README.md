@@ -2,7 +2,7 @@
 
 AI-powered company policy assistant. Employees ask natural-language questions about internal policies (leave, insurance, travel, reimbursements) and receive evidence-grounded answers with page-level citations.
 
-> **Status:** Phase 4 — Embeddings and Vector Search. PDF ingestion, page-preserving extraction, paragraph- and heading-aware chunking, dense vector embeddings (FastEmbed), persistent vector indexing (Qdrant), semantic vector search API, and search UI are operational. BM25 keyword search, hybrid retrieval (RRF), cross-encoder reranking, and LLM answer generation will be introduced in subsequent phases.
+> **Status:** Phase 5 — BM25 Keyword Search + Hybrid Retrieval with Reciprocal Rank Fusion (RRF). PDF ingestion, page-preserving extraction, paragraph/heading-aware chunking, dense vector embeddings (FastEmbed), vector storage (Qdrant), Okapi BM25 keyword search, and Reciprocal Rank Fusion (RRF) hybrid retrieval with search mode controls are operational. Cross-encoder reranking and LLM answer generation follow in subsequent phases.
 
 ---
 
@@ -22,17 +22,17 @@ AI-powered company policy assistant. Employees ask natural-language questions ab
 ```
 PolicyPilot/
 ├── frontend/           # Next.js + TypeScript + Tailwind CSS v3
-│   ├── app/            # App Router pages and layouts (Library, Chunks Viewer, Semantic Search)
+│   ├── app/            # App Router pages and layouts (Library, Chunks Viewer, Hybrid/Semantic Search)
 │   └── ...
 ├── backend/            # Python / FastAPI
 │   ├── app/            # Application package
-│   │   ├── main.py     # FastAPI entry point & CORS configuration
-│   │   ├── config.py   # Environment settings, chunking, Qdrant & embedding config
+│   │   ├── main.py     # FastAPI entry point, lifespan startup sync & CORS
+│   │   ├── config.py   # Settings (chunking, Qdrant, embeddings, BM25, RRF)
 │   │   ├── models/     # (reserved)
-│   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, Index)
-│   │   ├── services/   # Business logic (pdf, storage, chunking, embedding, vector, indexing, search)
+│   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, HybridSearch, Index)
+│   │   ├── services/   # Business logic (pdf, storage, chunking, embedding, vector, indexing, bm25, hybrid)
 │   │   └── routers/    # API routes (health, documents, search)
-│   ├── tests/          # pytest test suite (test_health, test_documents, test_chunking, test_vector_search)
+│   ├── tests/          # pytest test suite (77 tests across 5 test modules)
 │   ├── data/           # Local storage for PDFs, metadata, chunks, and Qdrant (gitignored)
 │   ├── requirements.txt
 │   └── requirements-dev.txt
@@ -88,7 +88,7 @@ cd backend
 # Start the development server (auto-reload)
 .venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
 
-# Run automated tests (57 tests)
+# Run automated tests (77 tests)
 .venv\Scripts\pytest.exe -v
 
 # Lint / format check
@@ -128,59 +128,49 @@ npm run build
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/documents/upload` | Ingest a PDF document, extract text, and chunk |
+| POST | `/api/documents/upload` | Ingest PDF, extract text page-by-page, chunk, and index into BM25 |
 | GET | `/api/documents` | List all ingested documents (metadata only) |
 | GET | `/api/documents/{document_id}` | Retrieve document details with raw page extractions |
 | GET | `/api/documents/{document_id}/chunks` | Retrieve structured chunks with section and page attribution |
 | GET | `/api/documents/{document_id}/file` | Stream or download original stored PDF file |
-| POST | `/api/documents/{document_id}/index` | Generate embeddings and index document chunks into Qdrant |
+| POST | `/api/documents/{document_id}/index` | Generate embeddings and index chunks into Qdrant & BM25 |
 
-### Semantic Vector Search
+### Search Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/search` | Search policy chunks by natural language semantic query |
+| POST | `/api/search` | Pure semantic vector search (Phase 4 backward-compatible) |
+| POST | `/api/search/keyword` | Exact BM25 keyword retrieval over indexed chunks |
+| POST | `/api/search/hybrid` | Hybrid retrieval fusing vector and BM25 results via RRF |
 
-#### POST `/api/documents/{document_id}/index` Example
-
-```bash
-curl -X POST http://localhost:8000/api/documents/72282962-7bde-404d-a821-f69d398c5c19/index
-```
-
-**Response (200 OK):**
-```json
-{
-  "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
-  "indexed_chunks": 2,
-  "status": "completed",
-  "message": "Successfully indexed 2 chunks into vector store"
-}
-```
-
-#### POST `/api/search` Example
+#### POST `/api/search/hybrid` Example
 
 ```bash
-curl -X POST http://localhost:8000/api/search \
+curl -X POST http://localhost:8000/api/search/hybrid \
   -H "Content-Type: application/json" \
-  -d '{"query": "How many annual vacation days do employees receive?", "limit": 3}'
+  -d '{"query": "POL-2026-X equipment stipend allowance", "limit": 3, "rrf_k": 60}'
 ```
 
 **Response (200 OK):**
 ```json
 {
-  "query": "How many annual vacation days do employees receive?",
-  "total_results": 1,
+  "query": "POL-2026-X equipment stipend allowance",
+  "total_results": 3,
+  "rrf_k": 60,
   "results": [
     {
-      "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
-      "filename": "leave_policy.pdf",
-      "chunk_id": "3a0df4c5-0951-536d-b8d9-399d8b1e42fa",
+      "document_id": "aba18ae1-338b-4819-9a4d-4e7230c31f24",
+      "filename": "acme_policy_2026.pdf",
+      "chunk_id": "240dc73c-74a4-569c-a111-9f9392e22c94",
       "chunk_index": 0,
-      "text": "1. Annual Leave Policy\nFull-time employees receive 20 days paid annual leave per calendar year...",
-      "section": "1. Annual Leave Policy",
-      "page_numbers": [1],
-      "character_count": 420,
-      "score": 0.8124
+      "text": "ACME GLOBAL POLICY MANUAL 2026\n# Section 1: Remote Work Allowance POL-2026-X\nUnder policy identifier POL-2026-X, full-time employees working remotely are entitled to a one-time ergonomic equipment allowance of $750...",
+      "section": "ACME GLOBAL POLICY MANUAL 2026",
+      "page_numbers": [1, 2],
+      "character_count": 515,
+      "vector_rank": 1,
+      "keyword_rank": 1,
+      "rrf_score": 0.032787,
+      "retrievers": ["vector", "bm25"]
     }
   ]
 }
@@ -188,42 +178,70 @@ curl -X POST http://localhost:8000/api/search \
 
 ---
 
-## Vector Search & Embedding Architecture
+## Retrieval Architecture
 
-### 1. Vector Database: Qdrant
-- **Engine:** Qdrant (`qdrant-client`).
-- **Storage Mode:** Runs in embedded local disk mode by default (`data/qdrant`), requiring no Docker or external cloud services for local development. Alternatively, set `QDRANT_URL` to connect to a local container or remote cluster.
-- **Collection Setup:** Default collection `policypilot_chunks` configured with Cosine distance metric and 384 vector dimensions.
-- **Dimension Enforcement:** Collections automatically validate dimension compatibility upon initialization, raising a clear error if configured embedding dimensions conflict with existing stored vectors.
-- **Lock Management:** Managed via a centralized singleton client to prevent Windows SQLite handle lock contention.
+PolicyPilot Phase 5 provides three distinct retrieval paths:
 
-### 2. Embedding Provider Abstraction
-- Defined in `backend/app/services/embedding_service.py` under `BaseEmbeddingProvider`.
-- **FastEmbedProvider (Default):** Uses `fastembed` with the pinned model `BAAI/bge-small-en-v1.5` (384 dimensions). Runs locally via ONNX Runtime without heavy PyTorch dependencies (~67MB download on first run, cached locally).
-- **MockEmbeddingProvider:** Generates reproducible, unit-normalized vectors based on deterministic text hashing for offline, sub-second test execution.
+```
+                  ┌──────────────────────┐
+                  │    User Query Q      │
+                  └──────────┬───────────┘
+                             │
+            ┌────────────────┴────────────────┐
+            ▼                                 ▼
+┌──────────────────────┐           ┌──────────────────────┐
+│  Vector Retriever    │           │    BM25 Retriever    │
+│  FastEmbed BGE model │           │  Okapi BM25 + Lucene │
+│  Qdrant Cosine search│           │  Tokenized chunks    │
+└──────────┬───────────┘           └──────────┬───────────┘
+           │ (vector_rank)                    │ (keyword_rank)
+           └────────────────┬─────────────────┘
+                            ▼
+              ┌───────────────────────────┐
+              │ Reciprocal Rank Fusion    │
+              │ RRF = Σ 1 / (k + rank)    │
+              │ Tie-breaker: chunk_id     │
+              └─────────────┬─────────────┘
+                            ▼
+                 Top-K Fused Candidates
+```
 
-### 3. Reindexing & Idempotency
-- Point IDs in Qdrant directly use the chunk's deterministic UUIDv5 identifier (`chunk_id`).
-- When a document is reindexed:
-  1. Prior vectors for that `document_id` are pruned to ensure no stale orphaned points remain if the chunk count changed.
-  2. New vectors are upserted with deterministic point IDs.
-  3. No duplicate vector records are created.
+### 1. BM25 Keyword Retrieval
 
----
+- **Algorithm:** Okapi BM25 with Lucene-adjusted IDF:
+  $$\text{IDF}(t) = \ln\left(1 + \frac{N - n(t) + 0.5}{n(t) + 0.5}\right)$$
+  $$\text{TF}_{\text{norm}}(t, d) = \frac{f(t, d) \cdot (k_1 + 1)}{f(t, d) + k_1 \cdot \left(1 - b + b \cdot \frac{|d|}{\text{avgdl}}\right)}$$
+  This formulation guarantees strictly positive IDF for all corpus terms ($> 0$), avoiding zero or negative scores on small corpora.
+- **Parameters:** Default $k_1 = 1.5$, $b = 0.75$ (configurable in `.env`).
+- **Tokenization Strategy:**
+  1. **Case Folding:** Converts input text to lowercase.
+  2. **Policy Identifiers & Numbers:** Regex pattern `[a-zA-Z0-9]+(?:[.\-_][a-zA-Z0-9]+)*` captures exact compound identifiers like `POL-2026-X`, `SEC-101`, `1.1`, and monetary values like `750`.
+  3. **Constituent Emission:** Emits sub-tokens for compound tokens so queries for either `POL-2026-X` or `2026` or `POL` match.
+  4. **Punctuation Stripping:** Punctuation delimiters ($, %, quotes, parentheses, brackets, colons) are cleanly stripped.
+- **Tokenization Limitations:** Optimized for English/alphanumeric policy documents. Non-delimited logographic scripts (e.g. Chinese, Japanese) require specialized morphological segmenters not bundled in this pipeline.
+- **Index Lifecycle & Startup Synchronization:**
+  - Single source of truth is disk persistence (`data/chunks/{document_id}.json`).
+  - At startup, `bm25_service.sync_from_storage()` loads all chunks and rebuilds vocabulary statistics atomically in memory (<50ms).
+  - Document uploads and index triggers update the in-memory BM25 index atomically under thread locks.
+  - Reindexing a document replaces all prior chunks for that document, preventing stale keyword entries or duplicate hits.
 
-## Storage Architecture
+### 2. Reciprocal Rank Fusion (RRF)
 
-- **Uploaded PDFs**: Stored at `backend/data/documents/{document_id}.pdf`.
-- **Extraction Metadata**: Persisted atomically as JSON at `backend/data/metadata/{document_id}.json`.
-- **Structured Chunks**: Persisted atomically as JSON at `backend/data/chunks/{document_id}.json`.
-- **Qdrant Vector Database**: Stored at `backend/data/qdrant/`.
-- **Git Exclusions**: `backend/data/`, `data/`, `*.pdf`, and `.fastembed_cache/` are excluded in `.gitignore` to prevent committing document or vector data.
+- **Formula:**
+  $$\text{RRF\_score}(d) = \sum_{r \in \text{retrievers}} \frac{1}{k + \text{rank}_r(d)}$$
+  Where $k$ is the smoothing constant (default: 60, validated $k > 0$), and $\text{rank}_r(d)$ is the 1-based rank position in retriever $r$.
+- **Provenance & Null Ranks:**
+  - If a chunk is returned by only one system, the missing rank is returned as `null` (`None`), never `0`.
+  - The `retrievers` array records contributing systems: `["vector", "bm25"]`, `["vector"]`, or `["bm25"]`.
+- **Tie-Breaking:**
+  - Candidates are sorted primarily by `rrf_score` descending.
+  - Ties are deterministically broken using `chunk_id` ascending.
 
 ---
 
 ## Environment Variables
 
-See [`.env.example`](.env.example) for configuration options:
+See [`.env.example`](.env.example) for all configuration options:
 
 | Variable | Default | Used by | Description |
 |----------|---------|---------|-------------|
@@ -243,14 +261,31 @@ See [`.env.example`](.env.example) for configuration options:
 | `EMBEDDING_BATCH_SIZE` | `32` | Backend | Batch size for embedding generation |
 | `DEFAULT_SEARCH_LIMIT` | `5` | Backend | Default number of search results to return |
 | `MAX_SEARCH_LIMIT` | `50` | Backend | Maximum search limit allowed |
+| `BM25_K1` | `1.5` | Backend | BM25 term frequency saturation parameter ($k_1 > 0$) |
+| `BM25_B` | `0.75` | Backend | BM25 document length normalization parameter ($0 \le b \le 1$) |
+| `RRF_K` | `60` | Backend | Reciprocal Rank Fusion smoothing constant ($k > 0$) |
+| `HYBRID_CANDIDATE_LIMIT` | `20` | Backend | Number of candidate chunks retrieved per retriever |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend | Backend API endpoint URL |
+
+---
+
+## Roadmap Progress
+
+- **Phase 1: Project foundation and architecture** — ✅ Complete (released)
+- **Phase 2: PDF ingestion and page-preserving extraction** — ✅ Complete (released)
+- **Phase 3: Page-aware chunking and metadata** — ✅ Complete (released)
+- **Phase 4: Embeddings and vector search** — ✅ Complete (released)
+- **Phase 5: BM25 and hybrid retrieval with RRF** — ✅ Complete (current phase: 5/8, 62.5%)
+- **Phase 6: Reranking and retrieval tuning** — ⏳ Not started
+- **Phase 7: Grounded LLM answers and citations** — ⏳ Not started
+- **Phase 8: RAG evaluation, final hardening, and deployment** — ⏳ Not started
 
 ---
 
 ## Known Limitations
 
 - **OCR Not Supported**: Scanned, image-only PDFs produce 0 extracted characters. Pages are preserved with `text=""` and indexing safely returns 0 indexed chunks.
-- **Vector Retrieval Only**: Phase 4 retrieves ranked source passages based on semantic vector similarity. BM25 keyword matching, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and LLM answer generation will be added in subsequent phases.
+- **Passage Retrieval Only**: Phase 5 returns retrieved and fused policy passages with provenance ranks. Cross-encoder reranking (Phase 6) and LLM answer generation with citation verification (Phase 7) will follow.
 - **Heading Recognition**: Plain-text regex heuristics are used; styling-based headings lacking structural markers fall back to `null`.
 
 ---

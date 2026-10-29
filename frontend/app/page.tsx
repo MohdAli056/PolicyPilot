@@ -46,6 +46,8 @@ interface DocumentChunk {
   character_count: number;
 }
 
+type SearchMode = "hybrid" | "semantic";
+
 interface SearchResultItem {
   document_id: string;
   filename: string;
@@ -55,7 +57,11 @@ interface SearchResultItem {
   section: string | null;
   page_numbers: number[];
   character_count: number;
-  score: number;
+  score?: number;
+  vector_rank?: number | null;
+  keyword_rank?: number | null;
+  rrf_score?: number;
+  retrievers?: string[];
 }
 
 interface IndexState {
@@ -91,7 +97,9 @@ export default function Home() {
   const [chunksError, setChunksError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"chunks" | "pages">("chunks");
 
-  // Semantic Search state
+  // Search state (Semantic vs Hybrid)
+  const [searchMode, setSearchMode] = useState<SearchMode>("hybrid");
+  const [executedMode, setExecutedMode] = useState<SearchMode>("hybrid");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [searchLimit, setSearchLimit] = useState<number>(5);
   const [searchResults, setSearchResults] = useState<SearchResultItem[] | null>(null);
@@ -301,7 +309,7 @@ export default function Home() {
     }
   };
 
-  // Handle semantic vector search submission
+  // Handle search submission (Semantic vs Hybrid)
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = searchQuery.trim();
@@ -310,9 +318,11 @@ export default function Home() {
     setSearching(true);
     setSearchError(null);
     setExecutedQuery(trimmed);
+    setExecutedMode(searchMode);
 
     try {
-      const res = await fetch(`${API_URL}/api/search`, {
+      const endpoint = searchMode === "hybrid" ? "/api/search/hybrid" : "/api/search";
+      const res = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -330,7 +340,11 @@ export default function Home() {
 
       setSearchResults(data.results || []);
     } catch (err) {
-      setSearchError(err instanceof Error ? err.message : "Failed to execute semantic search.");
+      setSearchError(
+        err instanceof Error
+          ? err.message
+          : `Failed to execute ${searchMode} search.`
+      );
       setSearchResults(null);
     } finally {
       setSearching(false);
@@ -346,7 +360,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 4: Embeddings & Semantic Vector Search
+                AI-powered company policy assistant — Phase 5: BM25 & Hybrid Search with RRF
               </p>
             </div>
 
@@ -380,27 +394,64 @@ export default function Home() {
           )}
         </header>
 
-        {/* Semantic Vector Search Section */}
+        {/* Search Section (Hybrid & Semantic) */}
         <section
           aria-labelledby="search-heading"
           className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm space-y-4"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <h2 id="search-heading" className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                <span>Semantic Vector Search</span>
+                <span>Policy Retrieval</span>
+                <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
+                  BM25 + RRF
+                </span>
                 <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
-                  Qdrant + FastEmbed
+                  Qdrant Vector
                 </span>
               </h2>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Query internal policies in natural language. Returns semantically matching source passages with page citations.
+                Query internal policies with semantic vector search, BM25 keyword matching, or hybrid fusion.
               </p>
+            </div>
+
+            {/* Search Mode Toggle */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Mode:</span>
+              <div className="inline-flex p-0.5 bg-gray-100 dark:bg-gray-800 rounded-md text-xs border border-gray-200 dark:border-gray-700">
+                <button
+                  id="search-mode-hybrid-button"
+                  type="button"
+                  onClick={() => setSearchMode("hybrid")}
+                  className={`px-3 py-1 rounded transition-colors ${
+                    searchMode === "hybrid"
+                      ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 font-medium shadow-xs"
+                      : "text-gray-500 hover:text-gray-900 dark:hover:text-gray-200"
+                  }`}
+                >
+                  Hybrid (BM25 + Vector)
+                </button>
+                <button
+                  id="search-mode-semantic-button"
+                  type="button"
+                  onClick={() => setSearchMode("semantic")}
+                  className={`px-3 py-1 rounded transition-colors ${
+                    searchMode === "semantic"
+                      ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 font-medium shadow-xs"
+                      : "text-gray-500 hover:text-gray-900 dark:hover:text-gray-200"
+                  }`}
+                >
+                  Semantic (Vector)
+                </button>
+              </div>
             </div>
           </div>
 
           <div className="text-[11px] bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-900/40 rounded p-2.5 text-blue-800 dark:text-blue-300">
-            ℹ️ <strong>Scope Note:</strong> This phase executes vector retrieval only. Retrieved passages represent raw extracted document chunks ranked by cosine similarity. LLM answer synthesis and citation generation will follow in future phases.
+            ℹ️ <strong>Scope Note:</strong>{" "}
+            {searchMode === "hybrid"
+              ? "Hybrid mode combines Okapi BM25 keyword matching with dense Qdrant vector retrieval using Reciprocal Rank Fusion (RRF constant k=60)."
+              : "Semantic mode executes dense vector retrieval with cosine similarity over FastEmbed embeddings stored in Qdrant."}
           </div>
 
           {/* Search Form */}
@@ -409,7 +460,11 @@ export default function Home() {
               <input
                 id="search-query-input"
                 type="text"
-                placeholder="Ask or search policies (e.g., annual leave allowance, business travel expenses, health insurance)..."
+                placeholder={
+                  searchMode === "hybrid"
+                    ? "Ask in natural language or enter exact policy codes (e.g., HR-2024, annual leave, business travel)..."
+                    : "Ask or search policies (e.g., annual leave allowance, business travel expenses, health insurance)..."
+                }
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 disabled={searching}
@@ -438,6 +493,8 @@ export default function Home() {
                       <span className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                       Searching…
                     </>
+                  ) : searchMode === "hybrid" ? (
+                    "Search Hybrid"
                   ) : (
                     "Search Vectors"
                   )}
@@ -457,7 +514,8 @@ export default function Home() {
             <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3" id="search-results-container">
               <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
                 <span>
-                  Query: &ldquo;<strong className="text-gray-900 dark:text-gray-100">{executedQuery}</strong>&rdquo; — Found{" "}
+                  Query: &ldquo;<strong className="text-gray-900 dark:text-gray-100">{executedQuery}</strong>&rdquo;
+                  {" "}(<span className="capitalize font-medium text-gray-800 dark:text-gray-200">{executedMode}</span> mode) — Found{" "}
                   <strong>{searchResults.length}</strong> matching passage{searchResults.length === 1 ? "" : "s"}
                 </span>
                 <button
@@ -474,7 +532,7 @@ export default function Home() {
               {searchResults.length === 0 ? (
                 <div className="text-center py-6 border border-dashed border-gray-200 dark:border-gray-800 rounded-md">
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    No matching passages found. Ensure your documents have been indexed using the &ldquo;Index for Search&rdquo; action below.
+                    No matching passages found. Ensure your documents have been uploaded and indexed using the &ldquo;Index for Search&rdquo; action below.
                   </p>
                 </div>
               ) : (
@@ -499,10 +557,37 @@ export default function Home() {
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 text-[11px]">
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
-                            Cosine: {result.score.toFixed(4)}
-                          </span>
+                        <div className="flex items-center gap-2.5 text-[11px]">
+                          {executedMode === "hybrid" ? (
+                            <>
+                              {result.rrf_score !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" title="Reciprocal Rank Fusion score">
+                                  RRF: {result.rrf_score.toFixed(6)}
+                                </span>
+                              )}
+                              {result.vector_rank !== null && result.vector_rank !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                  Vector #{result.vector_rank}
+                                </span>
+                              )}
+                              {result.keyword_rank !== null && result.keyword_rank !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                  BM25 #{result.keyword_rank}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              {result.score !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                                  Cosine: {result.score.toFixed(4)}
+                                </span>
+                              )}
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                Vector
+                              </span>
+                            </>
+                          )}
                           <span className="text-gray-500 dark:text-gray-400">
                             Page{result.page_numbers.length > 1 ? "s" : ""}:{" "}
                             <strong className="text-gray-700 dark:text-gray-300 font-mono">

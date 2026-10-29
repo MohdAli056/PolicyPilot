@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     default_search_limit: int = 5
     max_search_limit: int = 50
 
+    # BM25 Keyword Search configuration
+    bm25_k1: float = 1.5
+    bm25_b: float = 0.75
+
+    # Hybrid Search and Reciprocal Rank Fusion (RRF) configuration
+    rrf_k: int = 60
+    hybrid_candidate_limit: int = 20
+
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         """Validate chunking, vector, and search constraints."""
@@ -79,6 +87,17 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"max_search_limit ({self.max_search_limit}) must be >= "
                 f"default_search_limit ({self.default_search_limit})"
+            )
+        if self.bm25_k1 <= 0:
+            raise ValueError(f"bm25_k1 must be positive, got {self.bm25_k1}")
+        if not (0.0 <= self.bm25_b <= 1.0):
+            raise ValueError(f"bm25_b must be between 0.0 and 1.0, got {self.bm25_b}")
+        if self.rrf_k <= 0:
+            raise ValueError(f"rrf_k must be positive, got {self.rrf_k}")
+        if self.hybrid_candidate_limit <= 0:
+            raise ValueError(
+                f"hybrid_candidate_limit must be positive, "
+                f"got {self.hybrid_candidate_limit}"
             )
         valid_providers = ("fastembed", "mock")
         if self.embedding_provider.lower() not in valid_providers:

@@ -16,6 +16,7 @@ from app.schemas.document import (
     DocumentMetadata,
 )
 from app.schemas.index import IndexDocumentResponse
+from app.services.bm25_service import bm25_service
 from app.services.chunking_service import chunk_document
 from app.services.indexing_service import indexing_service
 from app.services.pdf_service import (
@@ -134,15 +135,24 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentDetail:
         chunks = await asyncio.to_thread(chunk_document, document_id, pages)
         storage_service.save_chunks(document_id, chunks)
 
+        # Index into BM25 keyword service
+        bm25_service.index_document_chunks(
+            document_id=document_id,
+            filename=clean_filename,
+            chunks=chunks,
+        )
+
         return doc_detail
 
     except HTTPException:
-        # Clean up partial or rejected PDF file and chunks
+        # Clean up partial or rejected PDF file, chunks, and index state
         storage_service.cleanup_document(document_id)
+        bm25_service.delete_document(document_id)
         raise
 
     except Exception as exc:
         storage_service.cleanup_document(document_id)
+        bm25_service.delete_document(document_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while processing the document.",
