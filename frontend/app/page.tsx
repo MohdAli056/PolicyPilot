@@ -46,7 +46,7 @@ interface DocumentChunk {
   character_count: number;
 }
 
-type SearchMode = "hybrid" | "semantic";
+type SearchMode = "rerank" | "hybrid" | "semantic";
 
 interface SearchResultItem {
   document_id: string;
@@ -62,6 +62,8 @@ interface SearchResultItem {
   keyword_rank?: number | null;
   rrf_score?: number;
   retrievers?: string[];
+  rerank_score?: number;
+  rerank_rank?: number;
 }
 
 interface IndexState {
@@ -97,9 +99,9 @@ export default function Home() {
   const [chunksError, setChunksError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"chunks" | "pages">("chunks");
 
-  // Search state (Semantic vs Hybrid)
-  const [searchMode, setSearchMode] = useState<SearchMode>("hybrid");
-  const [executedMode, setExecutedMode] = useState<SearchMode>("hybrid");
+  // Search state (Semantic, Hybrid, Reranked)
+  const [searchMode, setSearchMode] = useState<SearchMode>("rerank");
+  const [executedMode, setExecutedMode] = useState<SearchMode>("rerank");
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [searchLimit, setSearchLimit] = useState<number>(5);
   const [searchResults, setSearchResults] = useState<SearchResultItem[] | null>(null);
@@ -309,7 +311,13 @@ export default function Home() {
     }
   };
 
-  // Handle search submission (Semantic vs Hybrid)
+  const handleModeChange = (mode: SearchMode) => {
+    setSearchMode(mode);
+    setSearchResults(null);
+    setSearchError(null);
+  };
+
+  // Handle search submission (Semantic, Hybrid, or Reranked)
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = searchQuery.trim();
@@ -321,7 +329,12 @@ export default function Home() {
     setExecutedMode(searchMode);
 
     try {
-      const endpoint = searchMode === "hybrid" ? "/api/search/hybrid" : "/api/search";
+      const endpoint =
+        searchMode === "rerank"
+          ? "/api/search/rerank"
+          : searchMode === "hybrid"
+            ? "/api/search/hybrid"
+            : "/api/search";
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: "POST",
         headers: {
@@ -360,7 +373,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 5: BM25 & Hybrid Search with RRF
+                AI-powered company policy assistant — Phase 6: Cross-Encoder Reranking & Retrieval Quality Tuning
               </p>
             </div>
 
@@ -394,7 +407,7 @@ export default function Home() {
           )}
         </header>
 
-        {/* Search Section (Hybrid & Semantic) */}
+        {/* Search Section (Reranked, Hybrid, Semantic) */}
         <section
           aria-labelledby="search-heading"
           className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm space-y-4"
@@ -403,6 +416,9 @@ export default function Home() {
             <div>
               <h2 id="search-heading" className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
                 <span>Policy Retrieval</span>
+                <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
+                  Cross-Encoder
+                </span>
                 <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
                   BM25 + RRF
                 </span>
@@ -411,7 +427,7 @@ export default function Home() {
                 </span>
               </h2>
               <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Query internal policies with semantic vector search, BM25 keyword matching, or hybrid fusion.
+                Query internal policies with semantic vector search, BM25 keyword matching, or cross-encoder reranked hybrid search.
               </p>
             </div>
 
@@ -420,21 +436,33 @@ export default function Home() {
               <span className="text-xs text-gray-500 dark:text-gray-400 font-medium">Mode:</span>
               <div className="inline-flex p-0.5 bg-gray-100 dark:bg-gray-800 rounded-md text-xs border border-gray-200 dark:border-gray-700">
                 <button
+                  id="search-mode-rerank-button"
+                  type="button"
+                  onClick={() => handleModeChange("rerank")}
+                  className={`px-3 py-1 rounded transition-colors ${
+                    searchMode === "rerank"
+                      ? "bg-white dark:bg-gray-900 text-purple-600 dark:text-purple-400 font-medium shadow-xs"
+                      : "text-gray-500 hover:text-gray-900 dark:hover:text-gray-200"
+                  }`}
+                >
+                  Reranked
+                </button>
+                <button
                   id="search-mode-hybrid-button"
                   type="button"
-                  onClick={() => setSearchMode("hybrid")}
+                  onClick={() => handleModeChange("hybrid")}
                   className={`px-3 py-1 rounded transition-colors ${
                     searchMode === "hybrid"
                       ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 font-medium shadow-xs"
                       : "text-gray-500 hover:text-gray-900 dark:hover:text-gray-200"
                   }`}
                 >
-                  Hybrid (BM25 + Vector)
+                  Hybrid (RRF)
                 </button>
                 <button
                   id="search-mode-semantic-button"
                   type="button"
-                  onClick={() => setSearchMode("semantic")}
+                  onClick={() => handleModeChange("semantic")}
                   className={`px-3 py-1 rounded transition-colors ${
                     searchMode === "semantic"
                       ? "bg-white dark:bg-gray-900 text-blue-600 dark:text-blue-400 font-medium shadow-xs"
@@ -449,9 +477,11 @@ export default function Home() {
 
           <div className="text-[11px] bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-900/40 rounded p-2.5 text-blue-800 dark:text-blue-300">
             ℹ️ <strong>Scope Note:</strong>{" "}
-            {searchMode === "hybrid"
-              ? "Hybrid mode combines Okapi BM25 keyword matching with dense Qdrant vector retrieval using Reciprocal Rank Fusion (RRF constant k=60)."
-              : "Semantic mode executes dense vector retrieval with cosine similarity over FastEmbed embeddings stored in Qdrant."}
+            {searchMode === "rerank"
+              ? "Reranked mode retrieves candidates using BM25 and vector hybrid search (RRF), then rescores top passages using a cross-encoder model for deep semantic relevance."
+              : searchMode === "hybrid"
+                ? "Hybrid mode combines Okapi BM25 keyword matching with dense Qdrant vector retrieval using Reciprocal Rank Fusion (RRF constant k=60)."
+                : "Semantic mode executes dense vector retrieval with cosine similarity over FastEmbed embeddings stored in Qdrant."}
           </div>
 
           {/* Search Form */}
@@ -461,12 +491,19 @@ export default function Home() {
                 id="search-query-input"
                 type="text"
                 placeholder={
-                  searchMode === "hybrid"
-                    ? "Ask in natural language or enter exact policy codes (e.g., HR-2024, annual leave, business travel)..."
-                    : "Ask or search policies (e.g., annual leave allowance, business travel expenses, health insurance)..."
+                  searchMode === "rerank"
+                    ? "Ask in natural language or enter exact policy codes (e.g., annual leave allowance, travel expenses, HR-2024)..."
+                    : searchMode === "hybrid"
+                      ? "Ask in natural language or enter exact policy codes (e.g., HR-2024, annual leave, business travel)..."
+                      : "Ask or search policies (e.g., annual leave allowance, business travel expenses, health insurance)..."
                 }
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  if (searchResults !== null) {
+                    setSearchResults(null);
+                  }
+                }}
                 disabled={searching}
                 className="flex-1 text-xs px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
               />
@@ -493,6 +530,8 @@ export default function Home() {
                       <span className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
                       Searching…
                     </>
+                  ) : searchMode === "rerank" ? (
+                    "Rerank Search"
                   ) : searchMode === "hybrid" ? (
                     "Search Hybrid"
                   ) : (
@@ -501,6 +540,7 @@ export default function Home() {
                 </button>
               </div>
             </div>
+
 
             {searchError && (
               <div id="search-error-message" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 p-3 rounded">
@@ -558,7 +598,36 @@ export default function Home() {
                           )}
                         </div>
                         <div className="flex items-center gap-2.5 text-[11px]">
-                          {executedMode === "hybrid" ? (
+                          {executedMode === "rerank" ? (
+                            <>
+                              {result.rerank_score !== undefined && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300"
+                                  title="Cross-encoder relevance score"
+                                >
+                                  Rerank: {result.rerank_score.toFixed(6)}
+                                </span>
+                              )}
+                              {result.rrf_score !== undefined && (
+                                <span
+                                  className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+                                  title="Retrieval-stage Reciprocal Rank Fusion score"
+                                >
+                                  RRF: {result.rrf_score.toFixed(6)}
+                                </span>
+                              )}
+                              {result.vector_rank !== null && result.vector_rank !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                                  Vector #{result.vector_rank}
+                                </span>
+                              )}
+                              {result.keyword_rank !== null && result.keyword_rank !== undefined && (
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono text-[10px] bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                                  BM25 #{result.keyword_rank}
+                                </span>
+                              )}
+                            </>
+                          ) : executedMode === "hybrid" ? (
                             <>
                               {result.rrf_score !== undefined && (
                                 <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300" title="Reciprocal Rank Fusion score">

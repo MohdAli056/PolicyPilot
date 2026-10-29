@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     hybrid_candidate_limit: int = 20
 
+    # Cross-Encoder Reranking configuration
+    reranker_provider: str = "flashrank"
+    reranker_model: str = "ms-marco-TinyBERT-L-2-v2"
+    rerank_candidate_limit: int = 20
+    rerank_batch_size: int = 16
+
     @model_validator(mode="after")
     def validate_settings(self) -> "Settings":
         """Validate chunking, vector, and search constraints."""
@@ -104,6 +110,21 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"embedding_provider '{self.embedding_provider}' is not supported. "
                 f"Choose from: {', '.join(valid_providers)}"
+            )
+        if self.rerank_candidate_limit <= 0:
+            raise ValueError(
+                f"rerank_candidate_limit must be positive, "
+                f"got {self.rerank_candidate_limit}"
+            )
+        if self.rerank_batch_size <= 0:
+            raise ValueError(
+                f"rerank_batch_size must be positive, got {self.rerank_batch_size}"
+            )
+        valid_rerankers = ("flashrank", "mock")
+        if self.reranker_provider.lower() not in valid_rerankers:
+            raise ValueError(
+                f"reranker_provider '{self.reranker_provider}' is not supported. "
+                f"Choose from: {', '.join(valid_rerankers)}"
             )
         return self
 

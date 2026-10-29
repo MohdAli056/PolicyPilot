@@ -1,4 +1,6 @@
-"""Search API router supporting Semantic Vector, BM25 Keyword, and RRF Hybrid search."""
+"""Search API router supporting Semantic Vector, BM25 Keyword,
+RRF Hybrid, and Cross-Encoder Reranked search.
+"""
 
 import asyncio
 
@@ -9,9 +11,14 @@ from app.schemas.hybrid_search import (
     HybridSearchResponse,
     KeywordSearchResponse,
 )
+from app.schemas.rerank_search import (
+    RerankSearchRequest,
+    RerankSearchResponse,
+)
 from app.schemas.search import SearchRequest, SearchResponse
 from app.services.bm25_service import bm25_service
 from app.services.hybrid_search_service import hybrid_search_service
+from app.services.reranker_service import reranker_service
 from app.services.search_service import search_service
 
 router = APIRouter(prefix="/api/search", tags=["search"])
@@ -101,4 +108,33 @@ async def hybrid_search(request: HybridSearchRequest) -> HybridSearchResponse:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Hybrid search service error: {exc}",
+        ) from exc
+
+
+@router.post(
+    "/rerank",
+    response_model=RerankSearchResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Cross-encoder reranked hybrid search over policy document chunks",
+)
+async def rerank_search(request: RerankSearchRequest) -> RerankSearchResponse:
+    """Retrieve candidates with hybrid search and rerank using a cross-encoder model."""
+    try:
+        response = await asyncio.to_thread(
+            reranker_service.search_and_rerank,
+            query=request.query,
+            limit=request.limit,
+            candidate_limit=request.candidate_limit,
+            rrf_k=request.rrf_k,
+        )
+        return response
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Reranking search service error: {exc}",
         ) from exc
