@@ -1,6 +1,6 @@
 # PolicyPilot Architecture
 
-> Phase 3 — Document Chunking and Metadata. Last updated: 2026-10-27.
+> Phase 4 — Embeddings and Vector Search. Last updated: 2026-10-29.
 
 This document describes the current architecture of PolicyPilot and outlines where future capabilities will be integrated. Sections are explicitly marked **[IMPLEMENTED]** or **[PLANNED]** to distinguish working code from future design intent.
 
@@ -16,12 +16,12 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 
 ```
 ┌──────────────────────────────────────────────┐
-│             Frontend (Next.js 16)            │  ← User interface (Dashboard, Library, Chunks Viewer)
+│             Frontend (Next.js 16)            │  ← User interface (Dashboard, Chunks, Semantic Search)
 ├──────────────────────────────────────────────┤
-│             Backend  (FastAPI)               │  ← API, storage & processing pipeline
+│             Backend  (FastAPI)               │  ← API, storage & retrieval pipeline
 ├──────────────┬───────────────┬───────┬───────┤
-│ PDF Ingest   │ Chunking      │ Vector│ BM25  │  ← Ingestion & Chunking [IMPLEMENTED]
-│ & Extraction │ & Metadata    │ (Qdr) │ (RRF) │  ← Retrieval & Generation [PLANNED]
+│ PDF Ingest   │ Chunking      │ Qdrant│ BM25  │  ← Ingest, Chunks, Qdrant/Vectors [IMPLEMENTED]
+│ & Extraction │ & Metadata    │ Vector│ (RRF) │  ← Keyword BM25, Reranker, LLM [PLANNED]
 └──────────────┴───────────────┴───────┴───────┘
 ```
 
@@ -38,6 +38,8 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | Ingested document library list (`GET /api/documents`) | ✅ Implemented |
 | Document detail panel with raw page extraction viewer | ✅ Implemented |
 | Structured chunk inspector (`GET /api/documents/{id}/chunks`) | ✅ Implemented |
+| Semantic search input & ranked results display (`POST /api/search`) | ✅ Implemented |
+| Document indexing action trigger (`POST /api/documents/{id}/index`) | ✅ Implemented |
 | Stream / open original PDF (`GET /api/documents/{id}/file`) | ✅ Implemented |
 | Configurable backend URL (`NEXT_PUBLIC_API_URL`) | ✅ Implemented |
 | Timeout and error handling | ✅ Implemented |
@@ -45,9 +47,9 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 **Stack:** Next.js 16, React 19, TypeScript, Tailwind CSS v3.
 
 **Planned additions (later phases):**
-- Natural language policy question input and answer display.
-- Grounded citation viewer with highlightable page-level links.
-- Search diagnostics panel.
+- Natural language answer generation with grounded evidence synthesis.
+- Highlightable page-level citation links in PDF viewer.
+- Hybrid BM25 + dense vector search toggle and score weights.
 - RAG benchmark and evaluation dashboard.
 
 ---
@@ -62,22 +64,26 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | `GET /api/documents` document library listing | ✅ Implemented |
 | `GET /api/documents/{document_id}` document detail | ✅ Implemented |
 | `GET /api/documents/{document_id}/chunks` chunk retrieval | ✅ Implemented |
+| `POST /api/documents/{document_id}/index` vector indexing | ✅ Implemented |
+| `POST /api/search` semantic vector retrieval | ✅ Implemented |
 | `GET /api/documents/{document_id}/file` original file streaming | ✅ Implemented |
 | PyMuPDF page-preserving text extraction | ✅ Implemented |
 | Paragraph- and heading-aware chunking engine | ✅ Implemented |
 | Multi-page attribution & deterministic UUIDv5 chunk IDs | ✅ Implemented |
+| Dedicated embedding provider abstraction (`BaseEmbeddingProvider`) | ✅ Implemented |
+| Local ONNX embeddings via FastEmbed (`BAAI/bge-small-en-v1.5`) | ✅ Implemented |
+| Qdrant vector database collection management & cosine search | ✅ Implemented |
+| Idempotent reindexing & stale vector pruning | ✅ Implemented |
 | Atomic local storage & JSON metadata/chunks persistence | ✅ Implemented |
 | SHA-256 document hashing for audit/deduplication | ✅ Implemented |
 | Path traversal protection & server-generated UUIDs | ✅ Implemented |
-| Automated pytest test suite (38 tests) | ✅ Implemented |
+| Automated pytest test suite (57 tests) | ✅ Implemented |
 
-**Stack:** Python 3.12, FastAPI, PyMuPDF, Pydantic, Uvicorn.
+**Stack:** Python 3.12, FastAPI, PyMuPDF, Qdrant Client, FastEmbed (ONNX Runtime), Pydantic, Uvicorn.
 
 **Planned additions (later phases):**
-- Dense vector embeddings (OpenAI / Gemini / local).
-- Vector indexing with Qdrant.
 - BM25 sparse keyword retrieval & Reciprocal Rank Fusion (RRF).
-- Reranking model integration.
+- Cross-encoder reranking model integration.
 - Grounded LLM answer generation with citation verification.
 
 ---
@@ -86,7 +92,7 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 
 - Frontend → Backend over HTTP REST.
 - Base URL configurable via `NEXT_PUBLIC_API_URL` (frontend) / `CORS_ORIGINS` (backend).
-- All requests are standard JSON / multipart form data; no auth required in Phase 3.
+- All requests are standard JSON / multipart form data; no auth required in Phase 4.
 
 ### Implemented Endpoints
 
@@ -97,6 +103,8 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 | GET | `/api/documents` | Metadata listing of all ingested documents |
 | GET | `/api/documents/{document_id}` | Detailed document metadata with raw page extractions |
 | GET | `/api/documents/{document_id}/chunks` | Ordered document chunks with section and page attribution |
+| POST | `/api/documents/{document_id}/index` | Generate embeddings and store vectors in Qdrant |
+| POST | `/api/search` | Natural language semantic vector search |
 | GET | `/api/documents/{document_id}/file` | Download or stream original PDF |
 
 ---
@@ -109,10 +117,6 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 - **Metadata Storage:** Stored atomically as `backend/data/metadata/{document_id}.json` (gitignored).
 - **Page Invariant:** Page numbers are 1-based and match standard PDF viewers.
 - **Image-Only Documents:** Processed safely without crashing; pages are preserved with `text=""` and status indicates OCR is unsupported.
-- **Security:**
-  - Filenames sanitized to avoid directory traversal.
-  - Streaming chunked upload enforces `MAX_UPLOAD_SIZE_BYTES` (default 10 MB).
-  - Malformed, corrupt, or encrypted files are rejected with HTTP 400 and temporary files cleaned up.
 
 ---
 
@@ -120,98 +124,89 @@ PolicyPilot is an AI-powered company policy assistant. Employees ask natural-lan
 
 Implemented in `backend/app/services/chunking_service.py` and persisted via `backend/app/services/storage_service.py`.
 
-### 7.1 Chunking Strategy & Algorithm
 - **Character-Based Window:** Target size `TARGET_CHUNK_SIZE` (default 1,000 characters) and overlap `CHUNK_OVERLAP` (default 150 characters).
-- **Validation:** Enforced via Pydantic validator (`0 <= CHUNK_OVERLAP < TARGET_CHUNK_SIZE` and `TARGET_CHUNK_SIZE > 0`).
-- **Atomic Segment Splitting:** Text across pages is segmented preserving boundary hierarchies:
-  1. Headings (Markdown, numbered, section keywords, ALL-CAPS).
-  2. Paragraphs (`\n\n`).
-  3. Sentences (`[.!?]\s+`).
-  4. Word / Character fallbacks for oversized paragraphs.
-- **Accumulation & Overlap:**
-  - Segments are accumulated until adding the next segment exceeds the target chunk size.
-  - When splitting, the window steps back by `chunk_overlap` characters to preserve contextual continuity.
-  - Forward progress is mathematically guaranteed: `start_idx = max(start_idx + 1, back_idx + 1)`, preventing infinite loops.
-
-### 7.2 Page Attribution
-- Each atomic segment preserves its original 1-based PDF `page_number`.
-- Chunks record all distinct page numbers that contributed text in `page_numbers: list[int]`, sorted in ascending order.
-- Multi-page spanning chunks are accurately and explicitly tracked (e.g. `[1, 2]`).
-
-### 7.3 Section Detection & Limitations
-- Current section title is tracked dynamically as segments are processed.
-- Heuristic regex recognizes:
-  - Markdown: `# Title`, `## Subtitle`
-  - Numbered: `1. Leave Entitlement`, `2.3 Travel Expenses`
-  - Keywords: `Section 4: Medical Benefits`, `Article II`, `Chapter 1`
-  - ALL-CAPS single-line headings: `HOLIDAY CALENDAR`
-- **Limitations:** Only structural plain-text markers are detected. Stylistic formatting (such as font size variations without structural markers) cannot be recognized from plain extracted text and safely falls back to `section: null`.
-
-### 7.4 Chunk Identity & Persistence
-- **Deterministic Identity:**
-  ```python
-  uuid.uuid5(uuid.NAMESPACE_OID, f"{document_id}:{chunk_index}:{sha256(text)}")
-  ```
-- **Storage:** Persisted atomically as JSON at `backend/data/chunks/{document_id}.json` (gitignored).
+- **Atomic Segment Splitting:** Preserves headings (Markdown, numbered, section keywords, ALL-CAPS), paragraphs, and sentences.
+- **Page Attribution:** Retains all 1-based contributing page numbers in `page_numbers: list[int]`, correctly attributing multi-page spanning chunks.
+- **Deterministic Identity:** UUIDv5 generated from `uuid.uuid5(uuid.NAMESPACE_OID, f"{document_id}:{chunk_index}:{sha256(text)}")`.
 
 ---
 
-## 8. Embeddings, Vector Search, and Retrieval — [PLANNED]
+## 8. Embeddings & Vector Search Architecture — [IMPLEMENTED]
 
-### 8.1 Embeddings
-- Embedding provider abstraction (OpenAI `text-embedding-3-small`, Gemini, or local models).
-- Dense vectors generated for each chunk.
+Implemented in `backend/app/services/embedding_service.py`, `backend/app/services/vector_service.py`, `backend/app/services/indexing_service.py`, and `backend/app/services/search_service.py`.
 
-### 8.2 Vector & Hybrid Search
-- **Vector search:** Qdrant collection storing embeddings and chunk metadata.
-- **BM25 keyword search:** Sparse keyword matching.
-- **Hybrid fusion:** Reciprocal Rank Fusion (RRF) to merge dense and sparse rankings.
+### 8.1 Embedding Provider Abstraction
+- **Abstract Base Class:** `BaseEmbeddingProvider` defines `embed_texts()` and `embed_query()`.
+- **FastEmbedProvider (Default):**
+  - Model: `BAAI/bge-small-en-v1.5` (pinned).
+  - Dimension: 384 dimensions.
+  - Runtime: ONNX Runtime (CPU optimized, lightweight, no PyTorch overhead).
+  - Model Singleton: Loaded once and cached in memory across requests.
+- **MockEmbeddingProvider:**
+  - Fast, deterministic unit-normalized pseudo-vectors for offline automated test suites without requiring network access.
 
-### 8.3 Reranking
-- Cross-encoder reranking model to re-score top-K hybrid candidates.
+### 8.2 Vector Database: Qdrant
+- **Engine:** `qdrant-client` 1.20+.
+- **Storage Mode:** Runs in embedded local disk mode by default (`data/qdrant`), requiring zero external dependencies or Docker containers. Alternatively supports remote/container deployment via `QDRANT_URL`.
+- **Collection Configuration:**
+  - Collection name: `policypilot_chunks`
+  - Distance metric: `Cosine`
+  - Vector size: 384
+- **Dimension Compatibility Validation:** The service verifies existing collection dimensions on startup and raises `ValueError` if the configured model dimension conflicts with existing vectors.
+
+### 8.3 Vector Payloads & Reindexing Idempotency
+- Each point in Qdrant uses the chunk's deterministic `chunk_id` as its Point ID.
+- Payloads store:
+  - `document_id`: UUID of parent document
+  - `filename`: original filename
+  - `chunk_id`: chunk UUIDv5
+  - `chunk_index`: zero-based sequence index
+  - `text`: chunk text
+  - `section`: detected section or null
+  - `page_numbers`: contributing 1-based page numbers
+  - `character_count`: character length
+  - `indexed_at`: ISO UTC timestamp
+- **Reindexing Behavior:**
+  1. Any prior vectors for that `document_id` are pruned first to prevent stale orphaned points if the chunk count changed.
+  2. The new chunks are upserted with deterministic point IDs.
+  3. Reindexing unchanged chunks is completely idempotent and produces no duplicates.
 
 ---
 
-## 9. Answer Generation & Citation Flow — [PLANNED]
-
-- Grounded LLM prompt using retrieved chunks with page attribution.
-- Citations linked directly to source `document_id`, `page_numbers`, and `section`.
-- Citation verification to ensure answers are strictly evidence-backed.
-
----
-
-## 10. Data Flow Across Phases
+## 9. Data Flow Across Phases
 
 ```
 PDF upload [IMPLEMENTED]
   → page-level text extraction (page_number preserved) [IMPLEMENTED]
     → paragraph/heading chunking (deterministic ID + section + page_numbers) [IMPLEMENTED]
-      → embedding generation & Qdrant indexing [PLANNED]
-        → hybrid BM25 + vector search with RRF [PLANNED]
-          → cross-encoder reranking [PLANNED]
-            → LLM prompt with citations [PLANNED]
-              → frontend answer & highlightable page citations [PLANNED]
+      → embedding generation & Qdrant indexing [IMPLEMENTED]
+        → semantic vector search with cosine scoring [IMPLEMENTED]
+          → hybrid BM25 + dense search with RRF [PLANNED]
+            → cross-encoder reranking [PLANNED]
+              → LLM prompt with citations [PLANNED]
+                → frontend answer & highlightable page citations [PLANNED]
 ```
 
 ---
 
-## 11. Testing and Verification — [IMPLEMENTED]
+## 10. Testing and Verification — [IMPLEMENTED]
 
-- **Backend Tests:** 38 automated pytest tests covering:
-  - Health check & baseline endpoints.
-  - Upload, multi-page extraction, blank pages, corruption rejection, oversize rejection, metadata listing, detail retrieval, file streaming, and path traversal security.
-  - Short/long text chunking, overlap enforcement, paragraph boundary preference, oversized paragraph splitting, heading detection (Markdown, Numbered, Keyword, ALL-CAPS), page spanning attribution, empty text handling, invalid settings validation, deterministic chunk IDs, and API chunk retrieval.
+- **Backend Tests:** 57 automated pytest tests covering:
+  - Health check & baseline endpoints (7 tests).
+  - Document upload, extraction, corruption handling, and security (13 tests).
+  - Paragraph/heading chunking, page attribution, and settings validation (18 tests).
+  - Embedding generation, dimension validation, Qdrant collection management, indexing idempotency, metadata preservation, empty collection search, and API search/index endpoints (19 tests).
 - **Code Quality:** Ruff linter & formatter for Python; ESLint and TypeScript for Next.js.
-- **Browser Verification:** Real end-to-end browser verification of document upload and page/chunk inspection tabs.
+- **Browser Verification:** Real end-to-end browser verification of document upload, indexing, semantic search, and document detail inspection.
 
 ---
 
-## 12. Open Decisions
+## 11. Open Decisions
 
 | Decision | Notes |
 |----------|-------|
-| Storage backend for production | Local filesystem used for Phase 2/3; S3/GCS object storage suitable for cloud deployment. |
-| Embedding model selection | Will benchmark OpenAI `text-embedding-3-small` vs Gemini embeddings in Phase 4. |
-| Reranker model | Cross-encoder (e.g. `bge-reranker`) vs. API-based reranker TBD in Phase 5. |
+| Storage backend for production | Local filesystem & embedded Qdrant used for Phase 4; Qdrant Cloud/Cluster & S3 object storage suitable for cloud production. |
+| Hybrid retrieval weights | Tuning alpha between dense cosine similarity and sparse BM25 scores in Phase 5. |
+| Reranker model | Cross-encoder (e.g. `bge-reranker-base` or Cohere API) TBD in Phase 5. |
 | OCR Support | Tesseract or Cloud OCR can be plugged into `pdf_service.py` if scanned document volume requires it. |
 | Multi-tenancy | Document namespace / tenant IDs can be attached to metadata schema when auth is introduced. |

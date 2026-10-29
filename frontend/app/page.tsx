@@ -46,6 +46,23 @@ interface DocumentChunk {
   character_count: number;
 }
 
+interface SearchResultItem {
+  document_id: string;
+  filename: string;
+  chunk_id: string;
+  chunk_index: number;
+  text: string;
+  section: string | null;
+  page_numbers: number[];
+  character_count: number;
+  score: number;
+}
+
+interface IndexState {
+  status: "idle" | "indexing" | "indexed" | "empty" | "failed";
+  message?: string;
+}
+
 export default function Home() {
   // Backend health state
   const [healthStatus, setHealthStatus] = useState<HealthStatus>("loading");
@@ -73,6 +90,17 @@ export default function Home() {
   const [loadingChunks, setLoadingChunks] = useState<boolean>(false);
   const [chunksError, setChunksError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"chunks" | "pages">("chunks");
+
+  // Semantic Search state
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [searchLimit, setSearchLimit] = useState<number>(5);
+  const [searchResults, setSearchResults] = useState<SearchResultItem[] | null>(null);
+  const [searching, setSearching] = useState<boolean>(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [executedQuery, setExecutedQuery] = useState<string>("");
+
+  // Document Indexing state
+  const [indexingMap, setIndexingMap] = useState<Record<string, IndexState>>({});
 
   // Check backend health
   const checkHealth = () => {
@@ -238,6 +266,77 @@ export default function Home() {
     setChunksError(null);
   };
 
+  // Handle document indexing for semantic search
+  const handleIndexDocument = async (docId: string) => {
+    setIndexingMap((prev) => ({
+      ...prev,
+      [docId]: { status: "indexing", message: "Generating embeddings & indexing..." },
+    }));
+
+    try {
+      const res = await fetch(`${API_URL}/api/documents/${docId}/index`, {
+        method: "POST",
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || `Indexing failed with HTTP ${res.status}`);
+      }
+
+      setIndexingMap((prev) => ({
+        ...prev,
+        [docId]: {
+          status: data.status === "empty" ? "empty" : "indexed",
+          message: data.message,
+        },
+      }));
+    } catch (err) {
+      setIndexingMap((prev) => ({
+        ...prev,
+        [docId]: {
+          status: "failed",
+          message: err instanceof Error ? err.message : "Indexing failed",
+        },
+      }));
+    }
+  };
+
+  // Handle semantic vector search submission
+  const handleSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = searchQuery.trim();
+    if (!trimmed || searching) return;
+
+    setSearching(true);
+    setSearchError(null);
+    setExecutedQuery(trimmed);
+
+    try {
+      const res = await fetch(`${API_URL}/api/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: trimmed,
+          limit: searchLimit,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || `Search failed with HTTP ${res.status}`);
+      }
+
+      setSearchResults(data.results || []);
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : "Failed to execute semantic search.");
+      setSearchResults(null);
+    } finally {
+      setSearching(false);
+    }
+  };
+
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100 py-8 px-4 sm:px-6 lg:px-8">
       <div className="max-w-5xl mx-auto space-y-8">
@@ -247,7 +346,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 3: Document Chunking & Metadata
+                AI-powered company policy assistant — Phase 4: Embeddings & Semantic Vector Search
               </p>
             </div>
 
@@ -281,13 +380,169 @@ export default function Home() {
           )}
         </header>
 
+        {/* Semantic Vector Search Section */}
+        <section
+          aria-labelledby="search-heading"
+          className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm space-y-4"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 id="search-heading" className="text-base font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                <span>Semantic Vector Search</span>
+                <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                  Qdrant + FastEmbed
+                </span>
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Query internal policies in natural language. Returns semantically matching source passages with page citations.
+              </p>
+            </div>
+          </div>
+
+          <div className="text-[11px] bg-blue-50/70 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-900/40 rounded p-2.5 text-blue-800 dark:text-blue-300">
+            ℹ️ <strong>Scope Note:</strong> This phase executes vector retrieval only. Retrieved passages represent raw extracted document chunks ranked by cosine similarity. LLM answer synthesis and citation generation will follow in future phases.
+          </div>
+
+          {/* Search Form */}
+          <form onSubmit={handleSearch} className="space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              <input
+                id="search-query-input"
+                type="text"
+                placeholder="Ask or search policies (e.g., annual leave allowance, business travel expenses, health insurance)..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                disabled={searching}
+                className="flex-1 text-xs px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <div className="flex items-center gap-2">
+                <select
+                  id="search-limit-select"
+                  value={searchLimit}
+                  onChange={(e) => setSearchLimit(Number(e.target.value))}
+                  disabled={searching}
+                  className="text-xs px-2.5 py-2.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value={3}>Top 3</option>
+                  <option value={5}>Top 5</option>
+                  <option value={10}>Top 10</option>
+                </select>
+                <button
+                  id="search-submit-button"
+                  type="submit"
+                  disabled={!searchQuery.trim() || searching}
+                  className="px-5 py-2.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md whitespace-nowrap transition-colors flex items-center gap-2"
+                >
+                  {searching ? (
+                    <>
+                      <span className="h-3 w-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Searching…
+                    </>
+                  ) : (
+                    "Search Vectors"
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {searchError && (
+              <div id="search-error-message" className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 p-3 rounded">
+                <strong>Search Error:</strong> {searchError}
+              </div>
+            )}
+          </form>
+
+          {/* Search Results Display */}
+          {searchResults !== null && (
+            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-800 space-y-3" id="search-results-container">
+              <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400">
+                <span>
+                  Query: &ldquo;<strong className="text-gray-900 dark:text-gray-100">{executedQuery}</strong>&rdquo; — Found{" "}
+                  <strong>{searchResults.length}</strong> matching passage{searchResults.length === 1 ? "" : "s"}
+                </span>
+                <button
+                  onClick={() => {
+                    setSearchResults(null);
+                    setSearchQuery("");
+                  }}
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 underline"
+                >
+                  Clear results
+                </button>
+              </div>
+
+              {searchResults.length === 0 ? (
+                <div className="text-center py-6 border border-dashed border-gray-200 dark:border-gray-800 rounded-md">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    No matching passages found. Ensure your documents have been indexed using the &ldquo;Index for Search&rdquo; action below.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {searchResults.map((result, idx) => (
+                    <div
+                      key={result.chunk_id}
+                      className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden bg-white dark:bg-gray-900/80 shadow-xs"
+                    >
+                      {/* Result Header */}
+                      <div className="bg-gray-100/70 dark:bg-gray-800/60 px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-gray-800 dark:text-gray-100">
+                            #{idx + 1}
+                          </span>
+                          <span className="font-medium text-gray-900 dark:text-gray-100 max-w-xs truncate">
+                            {result.filename}
+                          </span>
+                          {result.section && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">
+                              {result.section}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-[11px]">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded font-mono font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                            Cosine: {result.score.toFixed(4)}
+                          </span>
+                          <span className="text-gray-500 dark:text-gray-400">
+                            Page{result.page_numbers.length > 1 ? "s" : ""}:{" "}
+                            <strong className="text-gray-700 dark:text-gray-300 font-mono">
+                              {result.page_numbers.join(", ")}
+                            </strong>
+                          </span>
+                          <button
+                            onClick={() => openDetail(result.document_id)}
+                            className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium underline"
+                          >
+                            Inspect Document
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Result Content */}
+                      <div className="p-3.5">
+                        <pre className="text-xs whitespace-pre-wrap font-mono text-gray-800 dark:text-gray-200 leading-relaxed bg-gray-50 dark:bg-gray-950/60 p-3 rounded border border-gray-100 dark:border-gray-800/80">
+                          {result.text}
+                        </pre>
+                        <div className="mt-2 flex items-center justify-between text-[10px] text-gray-400 dark:text-gray-500 font-mono">
+                          <span>Chunk #{result.chunk_index} ({result.character_count} chars)</span>
+                          <span>ID: {result.chunk_id}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Upload Section */}
         <section aria-labelledby="upload-heading" className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-6 shadow-sm">
           <h2 id="upload-heading" className="text-base font-semibold text-gray-900 dark:text-gray-100 mb-2">
             Upload Policy PDF
           </h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
-            Upload a policy document in PDF format. Text is extracted page-by-page and partitioned into structured, reproducible chunks.
+            Upload a policy document in PDF format. Text is extracted page-by-page and partitioned into structured chunks ready for indexing.
           </p>
 
           <form onSubmit={handleUpload} className="space-y-4">
@@ -359,46 +614,82 @@ export default function Home() {
                     <th className="py-2.5 px-3">Characters</th>
                     <th className="py-2.5 px-3">Size</th>
                     <th className="py-2.5 px-3">Status</th>
-                    <th className="py-2.5 px-3">Uploaded</th>
+                    <th className="py-2.5 px-3">Vector Index</th>
                     <th className="py-2.5 px-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-800/60">
-                  {documents.map((doc) => (
-                    <tr key={doc.document_id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/40">
-                      <td className="py-2.5 px-3 font-medium text-gray-900 dark:text-gray-100 max-w-xs truncate">
-                        {doc.filename}
-                      </td>
-                      <td className="py-2.5 px-3">{doc.total_pages}</td>
-                      <td className="py-2.5 px-3">{doc.total_characters.toLocaleString()}</td>
-                      <td className="py-2.5 px-3">{(doc.file_size_bytes / 1024).toFixed(1)} KB</td>
-                      <td className="py-2.5 px-3">
-                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
-                          {doc.ingestion_status}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 text-gray-500 dark:text-gray-400 whitespace-nowrap">
-                        {new Date(doc.uploaded_at).toLocaleString()}
-                      </td>
-                      <td className="py-2.5 px-3 text-right space-x-2 whitespace-nowrap">
-                        <button
-                          onClick={() => openDetail(doc.document_id)}
-                          className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
-                        >
-                          View Chunks & Pages
-                        </button>
-                        <span className="text-gray-300 dark:text-gray-700">|</span>
-                        <a
-                          href={`${API_URL}/api/documents/${doc.document_id}/file`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="text-xs text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200"
-                        >
-                          Original PDF
-                        </a>
-                      </td>
-                    </tr>
-                  ))}
+                  {documents.map((doc) => {
+                    const idxState = indexingMap[doc.document_id];
+                    return (
+                      <tr key={doc.document_id} className="hover:bg-gray-50/70 dark:hover:bg-gray-800/40">
+                        <td className="py-2.5 px-3 font-medium text-gray-900 dark:text-gray-100 max-w-xs truncate">
+                          {doc.filename}
+                        </td>
+                        <td className="py-2.5 px-3">{doc.total_pages}</td>
+                        <td className="py-2.5 px-3">{doc.total_characters.toLocaleString()}</td>
+                        <td className="py-2.5 px-3">{(doc.file_size_bytes / 1024).toFixed(1)} KB</td>
+                        <td className="py-2.5 px-3">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">
+                            {doc.ingestion_status}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          {idxState?.status === "indexing" ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] text-yellow-600 dark:text-yellow-400 font-medium">
+                              <span className="h-2 w-2 rounded-full bg-yellow-400 animate-pulse"></span>
+                              Indexing…
+                            </span>
+                          ) : idxState?.status === "indexed" ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300">
+                              ✓ Indexed
+                            </span>
+                          ) : idxState?.status === "empty" ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400">
+                              No Chunks
+                            </span>
+                          ) : idxState?.status === "failed" ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300" title={idxState.message}>
+                              Error
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => handleIndexDocument(doc.document_id)}
+                              className="inline-flex items-center gap-1 text-[11px] font-medium px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50 transition-colors"
+                            >
+                              ⚡ Index
+                            </button>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-right space-x-2 whitespace-nowrap">
+                          {idxState?.status === "indexed" && (
+                            <button
+                              onClick={() => handleIndexDocument(doc.document_id)}
+                              className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                              title="Reindex document vectors"
+                            >
+                              Reindex
+                            </button>
+                          )}
+                          <button
+                            onClick={() => openDetail(doc.document_id)}
+                            className="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
+                          >
+                            View Details
+                          </button>
+                          <span className="text-gray-300 dark:text-gray-700">|</span>
+                          <a
+                            href={`${API_URL}/api/documents/${doc.document_id}/file`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-xs text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200"
+                          >
+                            PDF
+                          </a>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -425,7 +716,20 @@ export default function Home() {
                   </p>
                 )}
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                {docDetail && (
+                  <button
+                    onClick={() => handleIndexDocument(docDetail.document_id)}
+                    disabled={indexingMap[docDetail.document_id]?.status === "indexing"}
+                    className="text-xs px-3 py-1 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded font-medium disabled:opacity-50"
+                  >
+                    {indexingMap[docDetail.document_id]?.status === "indexing"
+                      ? "Indexing…"
+                      : indexingMap[docDetail.document_id]?.status === "indexed"
+                        ? "✓ Reindex in Qdrant"
+                        : "⚡ Index in Qdrant"}
+                  </button>
+                )}
                 {docDetail && (
                   <a
                     href={`${API_URL}/api/documents/${docDetail.document_id}/file`}

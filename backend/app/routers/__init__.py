@@ -1,5 +1,5 @@
 """PolicyPilot API Routers."""
 
-from app.routers import documents, health
+from app.routers import documents, health, search
 
-__all__ = ["documents", "health"]
+__all__ = ["documents", "health", "search"]

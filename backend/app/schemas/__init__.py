@@ -7,6 +7,8 @@ from app.schemas.document import (
     DocumentMetadata,
     PageExtraction,
 )
+from app.schemas.index import IndexDocumentResponse
+from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
 
 __all__ = [
     "DocumentChunk",
@@ -14,5 +16,9 @@ __all__ = [
     "DocumentDetail",
     "DocumentListResponse",
     "DocumentMetadata",
+    "IndexDocumentResponse",
     "PageExtraction",
+    "SearchRequest",
+    "SearchResponse",
+    "SearchResultItem",
 ]

@@ -29,9 +29,25 @@ class Settings(BaseSettings):
     target_chunk_size: int = 1000
     chunk_overlap: int = 150
 
+    # Qdrant Vector Database configuration
+    qdrant_path: str = "data/qdrant"
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "policypilot_chunks"
+
+    # Embedding provider configuration
+    embedding_provider: str = "fastembed"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dimension: int = 384
+    embedding_batch_size: int = 32
+
+    # Search limits
+    default_search_limit: int = 5
+    max_search_limit: int = 50
+
     @model_validator(mode="after")
-    def validate_chunk_settings(self) -> "Settings":
-        """Validate chunk size and overlap constraints."""
+    def validate_settings(self) -> "Settings":
+        """Validate chunking, vector, and search constraints."""
         if self.target_chunk_size <= 0:
             raise ValueError(
                 f"target_chunk_size must be positive, got {self.target_chunk_size}"
@@ -44,6 +60,31 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"chunk_overlap ({self.chunk_overlap}) must be strictly less "
                 f"than target_chunk_size ({self.target_chunk_size})"
+            )
+        if self.embedding_dimension <= 0:
+            raise ValueError(
+                f"embedding_dimension must be positive, got {self.embedding_dimension}"
+            )
+        if self.embedding_batch_size <= 0:
+            raise ValueError(
+                f"embedding_batch_size must be positive, "
+                f"got {self.embedding_batch_size}"
+            )
+        if self.default_search_limit <= 0:
+            raise ValueError(
+                f"default_search_limit must be positive, "
+                f"got {self.default_search_limit}"
+            )
+        if self.max_search_limit < self.default_search_limit:
+            raise ValueError(
+                f"max_search_limit ({self.max_search_limit}) must be >= "
+                f"default_search_limit ({self.default_search_limit})"
+            )
+        valid_providers = ("fastembed", "mock")
+        if self.embedding_provider.lower() not in valid_providers:
+            raise ValueError(
+                f"embedding_provider '{self.embedding_provider}' is not supported. "
+                f"Choose from: {', '.join(valid_providers)}"
             )
         return self
 
@@ -72,6 +113,16 @@ class Settings(BaseSettings):
         from pathlib import Path
 
         p = Path(self.chunks_dir)
+        if not p.is_absolute():
+            backend_root = Path(__file__).resolve().parent.parent
+            p = backend_root / p
+        return p.resolve()
+
+    def get_qdrant_path(self):
+        """Return resolved pathlib.Path for local Qdrant embedded storage."""
+        from pathlib import Path
+
+        p = Path(self.qdrant_path)
         if not p.is_absolute():
             backend_root = Path(__file__).resolve().parent.parent
             p = backend_root / p

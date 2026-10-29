@@ -47,3 +47,7 @@ backend/data/
 data/
 *.pdf
 
+# --- Vector Database & Model Caches (Phase 4+) ---
+.fastembed_cache/
+*.onnx
+

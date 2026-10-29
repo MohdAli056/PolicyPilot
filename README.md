@@ -2,7 +2,7 @@
 
 AI-powered company policy assistant. Employees ask natural-language questions about internal policies (leave, insurance, travel, reimbursements) and receive evidence-grounded answers with page-level citations.
 
-> **Status:** Phase 3 — Document Chunking and Metadata. PDF ingestion, page-preserving extraction, paragraph- and heading-aware chunking with deterministic page attribution, and chunk inspection UI are operational. Dense embeddings, vector search (Qdrant), BM25 hybrid retrieval, reranking, and LLM answer generation are planned for future phases.
+> **Status:** Phase 4 — Embeddings and Vector Search. PDF ingestion, page-preserving extraction, paragraph- and heading-aware chunking, dense vector embeddings (FastEmbed), persistent vector indexing (Qdrant), semantic vector search API, and search UI are operational. BM25 keyword search, hybrid retrieval (RRF), cross-encoder reranking, and LLM answer generation will be introduced in subsequent phases.
 
 ---
 
@@ -22,18 +22,18 @@ AI-powered company policy assistant. Employees ask natural-language questions ab
 ```
 PolicyPilot/
 ├── frontend/           # Next.js + TypeScript + Tailwind CSS v3
-│   ├── app/            # App Router pages and layouts (Document Library, Chunks Viewer)
+│   ├── app/            # App Router pages and layouts (Library, Chunks Viewer, Semantic Search)
 │   └── ...
 ├── backend/            # Python / FastAPI
 │   ├── app/            # Application package
 │   │   ├── main.py     # FastAPI entry point & CORS configuration
-│   │   ├── config.py   # Environment-based settings & chunking configuration
+│   │   ├── config.py   # Environment settings, chunking, Qdrant & embedding config
 │   │   ├── models/     # (reserved)
-│   │   ├── schemas/    # Pydantic schemas (DocumentMetadata, DocumentDetail, DocumentChunk)
-│   │   ├── services/   # Business logic (pdf_service, storage_service, chunking_service)
-│   │   └── routers/    # API route modules (health, documents)
-│   ├── tests/          # pytest test suite (test_health, test_documents, test_chunking)
-│   ├── data/           # Local storage for PDFs, metadata, and chunks (gitignored)
+│   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, Index)
+│   │   ├── services/   # Business logic (pdf, storage, chunking, embedding, vector, indexing, search)
+│   │   └── routers/    # API routes (health, documents, search)
+│   ├── tests/          # pytest test suite (test_health, test_documents, test_chunking, test_vector_search)
+│   ├── data/           # Local storage for PDFs, metadata, chunks, and Qdrant (gitignored)
 │   ├── requirements.txt
 │   └── requirements-dev.txt
 ├── docs/               # Architecture and design documentation
@@ -88,7 +88,7 @@ cd backend
 # Start the development server (auto-reload)
 .venv\Scripts\uvicorn.exe app.main:app --reload --port 8000
 
-# Run automated tests
+# Run automated tests (57 tests)
 .venv\Scripts\pytest.exe -v
 
 # Lint / format check
@@ -124,62 +124,63 @@ npm run build
 |--------|------|-------------|
 | GET | `/health` | Service liveness check |
 
-**Example Response:**
-```json
-{
-  "status": "healthy",
-  "service": "PolicyPilot",
-  "version": "0.1.0",
-  "timestamp": "2026-10-27T16:00:00+00:00"
-}
-```
-
 ### Document Ingestion & Retrieval
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/documents/upload` | Ingest a PDF document (multipart/form-data), extract text, and chunk |
+| POST | `/api/documents/upload` | Ingest a PDF document, extract text, and chunk |
 | GET | `/api/documents` | List all ingested documents (metadata only) |
 | GET | `/api/documents/{document_id}` | Retrieve document details with raw page extractions |
 | GET | `/api/documents/{document_id}/chunks` | Retrieve structured chunks with section and page attribution |
 | GET | `/api/documents/{document_id}/file` | Stream or download original stored PDF file |
+| POST | `/api/documents/{document_id}/index` | Generate embeddings and index document chunks into Qdrant |
 
-#### POST `/api/documents/upload` Example
+### Semantic Vector Search
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/search` | Search policy chunks by natural language semantic query |
+
+#### POST `/api/documents/{document_id}/index` Example
 
 ```bash
-curl -X POST -F "file=@leave_policy.pdf" http://localhost:8000/api/documents/upload
-```
-
-#### GET `/api/documents/{document_id}/chunks` Example
-
-```bash
-curl http://localhost:8000/api/documents/72282962-7bde-404d-a821-f69d398c5c19/chunks
+curl -X POST http://localhost:8000/api/documents/72282962-7bde-404d-a821-f69d398c5c19/index
 ```
 
 **Response (200 OK):**
 ```json
 {
   "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
-  "filename": "leave_policy.pdf",
-  "total_chunks": 2,
-  "chunks": [
+  "indexed_chunks": 2,
+  "status": "completed",
+  "message": "Successfully indexed 2 chunks into vector store"
+}
+```
+
+#### POST `/api/search` Example
+
+```bash
+curl -X POST http://localhost:8000/api/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "How many annual vacation days do employees receive?", "limit": 3}'
+```
+
+**Response (200 OK):**
+```json
+{
+  "query": "How many annual vacation days do employees receive?",
+  "total_results": 1,
+  "results": [
     {
-      "chunk_id": "3a0df4c5-0951-536d-b8d9-399d8b1e42fa",
       "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
+      "filename": "leave_policy.pdf",
+      "chunk_id": "3a0df4c5-0951-536d-b8d9-399d8b1e42fa",
       "chunk_index": 0,
-      "text": "1. Annual Leave Policy\nFull-time employees receive 20 days paid annual leave per calendar year. Leave accrues monthly...",
+      "text": "1. Annual Leave Policy\nFull-time employees receive 20 days paid annual leave per calendar year...",
       "section": "1. Annual Leave Policy",
       "page_numbers": [1],
-      "character_count": 420
-    },
-    {
-      "chunk_id": "8fbb1a90-7d0c-512c-982d-2f16a0fce647",
-      "document_id": "72282962-7bde-404d-a821-f69d398c5c19",
-      "chunk_index": 1,
-      "text": "2. Leave Rollover Rules\nA maximum of 5 unused leave days may be carried over into the next calendar year...",
-      "section": "2. Leave Rollover Rules",
-      "page_numbers": [1, 2],
-      "character_count": 380
+      "character_count": 420,
+      "score": 0.8124
     }
   ]
 }
@@ -187,38 +188,26 @@ curl http://localhost:8000/api/documents/72282962-7bde-404d-a821-f69d398c5c19/ch
 
 ---
 
-## Chunking Architecture
+## Vector Search & Embedding Architecture
 
-The chunking engine (`backend/app/services/chunking_service.py`) prepares extracted PDF text for vector indexing and retrieval.
+### 1. Vector Database: Qdrant
+- **Engine:** Qdrant (`qdrant-client`).
+- **Storage Mode:** Runs in embedded local disk mode by default (`data/qdrant`), requiring no Docker or external cloud services for local development. Alternatively, set `QDRANT_URL` to connect to a local container or remote cluster.
+- **Collection Setup:** Default collection `policypilot_chunks` configured with Cosine distance metric and 384 vector dimensions.
+- **Dimension Enforcement:** Collections automatically validate dimension compatibility upon initialization, raising a clear error if configured embedding dimensions conflict with existing stored vectors.
+- **Lock Management:** Managed via a centralized singleton client to prevent Windows SQLite handle lock contention.
 
-### 1. Algorithm & Boundary Preference
-- **Unit of Measurement:** All sizes and overlaps are measured in **characters** (`character_count`), explicitly separated from token counts.
-- **Boundary Priority:**
-  1. Section / Heading boundaries (Markdown `#`, numbered `1.`, keyword `Section`, or `ALL-CAPS`).
-  2. Paragraph boundaries (`\n\n`).
-  3. Sentence boundaries (`.`, `?`, `!`).
-  4. Word / character boundaries (strict fallback for oversized blocks exceeding target size).
-- **Infinite Loop Protection:** Sliding window advances by at least one atomic segment per iteration (`start_idx = max(start_idx + 1, back_idx + 1)`), mathematically precluding infinite loops even with short text or large overlaps.
-- **No Empty Chunks:** Strips empty or whitespace-only chunks prior to returning.
+### 2. Embedding Provider Abstraction
+- Defined in `backend/app/services/embedding_service.py` under `BaseEmbeddingProvider`.
+- **FastEmbedProvider (Default):** Uses `fastembed` with the pinned model `BAAI/bge-small-en-v1.5` (384 dimensions). Runs locally via ONNX Runtime without heavy PyTorch dependencies (~67MB download on first run, cached locally).
+- **MockEmbeddingProvider:** Generates reproducible, unit-normalized vectors based on deterministic text hashing for offline, sub-second test execution.
 
-### 2. Heading-Aware Section Detection
-- Detects headings using structured regex:
-  - Markdown headings: `# Heading`, `## Subheading`
-  - Numbered headings: `1. Introduction`, `2.1 Policy Scope`
-  - Keyword headings: `Section 3: Benefits`, `Article IV`, `Chapter 1`
-  - ALL-CAPS single-line headings: `HOLIDAY SCHEDULE`
-- **Limitations:** Heuristic detection operates on plain extracted text without font-size or typography styling signals. Content with non-standard formatting falls back to `section: null` without fabricating phantom sections.
-
-### 3. Page Attribution Rules
-- Every chunk retains a sorted, deduplicated list of 1-based page numbers (`page_numbers: list[int]`) that contributed text to that chunk.
-- Chunks spanning multiple pages explicitly record all contributing pages (e.g. `[1, 2]`), enabling accurate multi-page source citations during subsequent RAG answer generation.
-
-### 4. Deterministic Chunk Identity
-- Chunk IDs are generated using UUIDv5 based on document identity, chunk index, and SHA-256 of the chunk text:
-  ```python
-  uuid.uuid5(uuid.NAMESPACE_OID, f"{document_id}:{chunk_index}:{sha256(text)}")
-  ```
-- Guaranteed to be reproducible across runs, processes, and reloads for identical documents and settings.
+### 3. Reindexing & Idempotency
+- Point IDs in Qdrant directly use the chunk's deterministic UUIDv5 identifier (`chunk_id`).
+- When a document is reindexed:
+  1. Prior vectors for that `document_id` are pruned to ensure no stale orphaned points remain if the chunk count changed.
+  2. New vectors are upserted with deterministic point IDs.
+  3. No duplicate vector records are created.
 
 ---
 
@@ -227,7 +216,8 @@ The chunking engine (`backend/app/services/chunking_service.py`) prepares extrac
 - **Uploaded PDFs**: Stored at `backend/data/documents/{document_id}.pdf`.
 - **Extraction Metadata**: Persisted atomically as JSON at `backend/data/metadata/{document_id}.json`.
 - **Structured Chunks**: Persisted atomically as JSON at `backend/data/chunks/{document_id}.json`.
-- **Git Exclusions**: `backend/data/`, `data/`, and all `*.pdf` files are excluded in `.gitignore` to prevent committing document or chunk data.
+- **Qdrant Vector Database**: Stored at `backend/data/qdrant/`.
+- **Git Exclusions**: `backend/data/`, `data/`, `*.pdf`, and `.fastembed_cache/` are excluded in `.gitignore` to prevent committing document or vector data.
 
 ---
 
@@ -244,17 +234,24 @@ See [`.env.example`](.env.example) for configuration options:
 | `CHUNKS_DIR` | `data/chunks` | Backend | Directory for storing chunk JSON files |
 | `TARGET_CHUNK_SIZE` | `1000` | Backend | Target chunk size in characters (must be > 0) |
 | `CHUNK_OVERLAP` | `150` | Backend | Chunk overlap in characters (must be < TARGET_CHUNK_SIZE) |
-| `MAX_UPLOAD_SIZE_BYTES` | `10485760` | Backend | Maximum upload size (10 MB) |
+| `QDRANT_PATH` | `data/qdrant` | Backend | Directory for local Qdrant embedded storage |
+| `QDRANT_URL` | `None` | Backend | Optional URL for remote/container Qdrant instance |
+| `QDRANT_COLLECTION` | `policypilot_chunks` | Backend | Qdrant collection name |
+| `EMBEDDING_PROVIDER` | `fastembed` | Backend | Embedding provider (`fastembed` or `mock`) |
+| `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Backend | Pinned embedding model identifier |
+| `EMBEDDING_DIMENSION` | `384` | Backend | Vector dimension for the embedding model |
+| `EMBEDDING_BATCH_SIZE` | `32` | Backend | Batch size for embedding generation |
+| `DEFAULT_SEARCH_LIMIT` | `5` | Backend | Default number of search results to return |
+| `MAX_SEARCH_LIMIT` | `50` | Backend | Maximum search limit allowed |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Frontend | Backend API endpoint URL |
 
 ---
 
 ## Known Limitations
 
-- **OCR Not Supported**: Scanned, image-only PDFs produce 0 extracted characters. Pages are preserved with `text=""` and chunking safely returns an empty chunk list.
-- **Password-Protected PDFs**: Encrypted PDFs are rejected with HTTP 400.
+- **OCR Not Supported**: Scanned, image-only PDFs produce 0 extracted characters. Pages are preserved with `text=""` and indexing safely returns 0 indexed chunks.
+- **Vector Retrieval Only**: Phase 4 retrieves ranked source passages based on semantic vector similarity. BM25 keyword matching, Reciprocal Rank Fusion (RRF), cross-encoder reranking, and LLM answer generation will be added in subsequent phases.
 - **Heading Recognition**: Plain-text regex heuristics are used; styling-based headings lacking structural markers fall back to `null`.
-- **Retrieval Scope**: Phase 3 strictly implements document chunking and metadata. Embeddings (Qdrant), BM25 hybrid search, reranking, and LLM answer generation will be introduced in subsequent phases.
 
 ---
 

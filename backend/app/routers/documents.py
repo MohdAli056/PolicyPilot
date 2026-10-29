@@ -15,7 +15,9 @@ from app.schemas.document import (
     DocumentListResponse,
     DocumentMetadata,
 )
+from app.schemas.index import IndexDocumentResponse
 from app.services.chunking_service import chunk_document
+from app.services.indexing_service import indexing_service
 from app.services.pdf_service import (
     PDFValidationError,
     compute_sha256,
@@ -243,3 +245,33 @@ async def get_document_file(document_id: str) -> FileResponse:
         media_type="application/pdf",
         filename=display_filename,
     )
+
+
+@router.post(
+    "/{document_id}/index",
+    response_model=IndexDocumentResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Index document chunks into vector database",
+)
+async def index_document_endpoint(document_id: str) -> IndexDocumentResponse:
+    """Generate embeddings for document chunks and store them in Qdrant."""
+    if not storage_service.validate_document_id(document_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    try:
+        # Run indexing in threadpool to avoid blocking event loop
+        result = await asyncio.to_thread(indexing_service.index_document, document_id)
+        return result
+    except KeyError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to index document: {exc}",
+        ) from exc
