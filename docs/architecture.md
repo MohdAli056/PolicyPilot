@@ -203,9 +203,9 @@ Measured using `backend/tests/benchmark_performance.py`:
 
 ## 11. Testing and Verification Suite
 
-- **126 Automated Tests (100% Passing):**
+- **129 Automated Tests (100% Passing):**
   - `test_chunking.py`: Paragraph splitting, heading heuristics, overlap, tokenization (18 tests).
-  - `test_documents.py`: Uploads, page extraction, listing, streaming, error paths (13 tests).
+  - `test_documents.py`: Uploads, extraction, deletion, listing, streaming, error paths (16 tests).
   - `test_evaluation.py`: Pytest assertions on RAG evaluation metrics and citation validity (2 tests).
   - `test_health.py`: Liveness probe and baseline health checks (7 tests).
   - `test_hybrid_search.py`: BM25 tokenization, RRF rank fusion, hybrid endpoints (20 tests).

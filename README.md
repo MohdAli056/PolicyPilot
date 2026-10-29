@@ -33,7 +33,7 @@ PolicyPilot/
 │   │   ├── schemas/    # Pydantic schemas (Document, Chunk, Search, HybridSearch, RerankSearch, Index, QA, Claims)
 │   │   ├── services/   # Core logic (pdf, storage, chunking, embedding, vector, indexing, bm25, hybrid, reranker, llm, rag)
 │   │   └── routers/    # API routes (health & readiness, documents, search, qa)
-│   ├── tests/          # Automated pytest test suite, security tests & RAG evaluation (126 tests)
+│   ├── tests/          # Automated pytest test suite, security tests & RAG evaluation (129 tests)
 │   │   ├── rag_eval_dataset.py      # Deterministic 16-chunk synthetic policy corpus & 12 test queries
 │   │   ├── evaluate_rag.py          # Multi-stage retrieval & QA evaluation pipeline
 │   │   ├── benchmark_performance.py # Micro-benchmarking for cold vs warm pipeline latencies
@@ -130,7 +130,7 @@ Run the automated test and verification suites:
 ```bash
 cd backend
 
-# 1. Run complete pytest regression suite (126 tests, 100% passing)
+# 1. Run complete pytest regression suite (129 tests, 100% passing)
 .venv\Scripts\pytest.exe -v
 
 # 2. Run multi-stage RAG evaluation benchmark

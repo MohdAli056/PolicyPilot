@@ -304,3 +304,44 @@ class TestDocumentRetrieval:
 
             file_res = client.get(f"/api/documents/{malicious_id}/file")
             assert file_res.status_code == 404
+
+
+class TestDocumentDelete:
+    """Tests for DELETE /api/documents/{document_id}."""
+
+    def test_delete_document_success(self) -> None:
+        content = "Temporary policy document to be deleted."
+        pdf_bytes = create_pdf_bytes([content])
+
+        upload_res = client.post(
+            "/api/documents/upload",
+            files={
+                "file": ("delete_test.pdf", io.BytesIO(pdf_bytes), "application/pdf")
+            },
+        )
+        assert upload_res.status_code == 201
+        doc_id = upload_res.json()["document_id"]
+
+        # Confirm document exists before deletion
+        assert client.get(f"/api/documents/{doc_id}").status_code == 200
+
+        # Execute DELETE
+        del_res = client.delete(f"/api/documents/{doc_id}")
+        assert del_res.status_code == 200
+        assert del_res.json()["document_id"] == doc_id
+        assert "deleted" in del_res.json()["detail"].lower()
+
+        # Confirm 404 on subsequent lookups
+        assert client.get(f"/api/documents/{doc_id}").status_code == 404
+        assert client.get(f"/api/documents/{doc_id}/file").status_code == 404
+        assert client.get(f"/api/documents/{doc_id}/chunks").status_code == 404
+
+    def test_delete_nonexistent_document_returns_404(self) -> None:
+        random_uuid = str(uuid.uuid4())
+        del_res = client.delete(f"/api/documents/{random_uuid}")
+        assert del_res.status_code == 404
+        assert del_res.json()["detail"] == "Document not found."
+
+    def test_delete_invalid_uuid_returns_404(self) -> None:
+        del_res = client.delete("/api/documents/invalid-uuid-123")
+        assert del_res.status_code == 404

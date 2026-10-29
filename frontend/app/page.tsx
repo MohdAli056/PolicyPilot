@@ -149,7 +149,7 @@ export default function Home() {
   const [searchError, setSearchError] = useState<string | null>(null);
   const [executedQuery, setExecutedQuery] = useState<string>("");
 
-  // Question Answering (RAG) state - Phase 7
+  // Question Answering (RAG) state
   const [qaQuestion, setQaQuestion] = useState<string>("");
   const [qaLimit, setQaLimit] = useState<number>(5);
   const [asking, setAsking] = useState<boolean>(false);
@@ -158,8 +158,9 @@ export default function Home() {
   const [selectedCitationId, setSelectedCitationId] = useState<string | null>(null);
   const [showAllSources, setShowAllSources] = useState<boolean>(false);
 
-  // Document Indexing state
+  // Document Indexing and Deletion state
   const [indexingMap, setIndexingMap] = useState<Record<string, IndexState>>({});
+  const [deletingDocId, setDeletingDocId] = useState<string | null>(null);
 
   // Check backend health
   const checkHealth = () => {
@@ -360,6 +361,45 @@ export default function Home() {
     }
   };
 
+  // Handle document deletion
+  const handleDeleteDocument = async (docId: string, filename: string) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to permanently delete "${filename}"?\n\nThis will remove the uploaded PDF, all extracted text chunks, BM25 keyword index, and Qdrant vector representations.`
+    );
+    if (!confirmed) return;
+
+    setDeletingDocId(docId);
+    try {
+      const res = await fetch(`${API_URL}/api/documents/${docId}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => null);
+        throw new Error(errorData?.detail || `Failed to delete document (${res.status})`);
+      }
+
+      // Remove from documents list
+      setDocuments((prev) => prev.filter((d) => d.document_id !== docId));
+
+      // Remove from indexing state
+      setIndexingMap((prev) => {
+        const next = { ...prev };
+        delete next[docId];
+        return next;
+      });
+
+      // Close detail view if this document was selected
+      if (selectedDocId === docId) {
+        closeDetail();
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete document.");
+    } finally {
+      setDeletingDocId(null);
+    }
+  };
+
   const handleModeChange = (mode: SearchMode) => {
     setSearchMode(mode);
     setSearchResults(null);
@@ -413,7 +453,7 @@ export default function Home() {
     }
   };
 
-  // Handle Question Answering submission (Phase 7 RAG)
+  // Handle Question Answering submission
   const handleAsk = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = qaQuestion.trim();
@@ -501,7 +541,7 @@ export default function Home() {
             <div>
               <h1 className="text-2xl font-bold tracking-tight">PolicyPilot</h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                AI-powered company policy assistant — Phase 7: Grounded LLM Answers & Verifiable Citations
+                AI-powered enterprise policy assistant with verifiable citations & multi-stage retrieval
               </p>
             </div>
 
@@ -535,7 +575,7 @@ export default function Home() {
           )}
         </header>
 
-        {/* Grounded Question Answering Section (Phase 7 RAG) */}
+        {/* Grounded Question Answering Section */}
         <section
           aria-labelledby="qa-heading"
           className="bg-white dark:bg-gray-900 border border-blue-200/70 dark:border-blue-900/50 rounded-lg p-6 shadow-sm space-y-5"
@@ -1218,6 +1258,15 @@ export default function Home() {
                           >
                             PDF
                           </a>
+                          <span className="text-gray-300 dark:text-gray-700">|</span>
+                          <button
+                            onClick={() => handleDeleteDocument(doc.document_id, doc.filename)}
+                            disabled={deletingDocId === doc.document_id}
+                            className="text-xs text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 font-medium disabled:opacity-50"
+                            title="Permanently delete document"
+                          >
+                            {deletingDocId === doc.document_id ? "Deleting…" : "Delete"}
+                          </button>
                         </td>
                       </tr>
                     );
@@ -1271,6 +1320,16 @@ export default function Home() {
                   >
                     Open PDF in Viewer
                   </a>
+                )}
+                {docDetail && (
+                  <button
+                    onClick={() => handleDeleteDocument(docDetail.document_id, docDetail.filename)}
+                    disabled={deletingDocId === docDetail.document_id}
+                    className="text-xs px-3 py-1 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/50 rounded font-medium disabled:opacity-50 transition-colors"
+                    title="Permanently delete document"
+                  >
+                    {deletingDocId === docDetail.document_id ? "Deleting…" : "Delete Policy"}
+                  </button>
                 )}
                 <button
                   onClick={closeDetail}
@@ -1413,7 +1472,7 @@ export default function Home() {
                             </pre>
                           ) : (
                             <p className="text-xs italic text-gray-400 dark:text-gray-500 py-2">
-                              (No extractable text found on this page. If this page is an image or scanned document, OCR is not supported in Phase 2/3.)
+                              (No extractable text found on this page. If this page is an image or scanned document, OCR processing is required.)
                             </p>
                           )}
                         </div>

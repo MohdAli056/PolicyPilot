@@ -26,6 +26,7 @@ from app.services.pdf_service import (
     extract_pdf_pages,
 )
 from app.services.storage_service import storage_service
+from app.services.vector_service import get_vector_service
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -289,3 +290,47 @@ async def index_document_endpoint(document_id: str) -> IndexDocumentResponse:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to index document: {exc}",
         ) from exc
+
+
+@router.delete(
+    "/{document_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete an uploaded policy document, chunks, and search indices",
+)
+async def delete_document(document_id: str) -> dict[str, str]:
+    """Permanently delete an ingested policy PDF, its extracted chunks,
+
+    metadata, BM25 inverted index entries, and Qdrant vector points.
+    """
+    if not storage_service.validate_document_id(document_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    doc = storage_service.get_document(document_id)
+    if doc is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Document not found.",
+        )
+
+    # 1. Clean up disk files (PDF, metadata JSON, chunks JSON)
+    storage_service.cleanup_document(document_id)
+
+    # 2. Remove document from BM25 keyword index
+    bm25_service.delete_document(document_id)
+
+    # 3. Remove document vectors from Qdrant
+    try:
+        vec_svc = get_vector_service()
+        await asyncio.to_thread(vec_svc.delete_document_chunks, document_id)
+    except Exception:
+        # Non-fatal if vector collection was not yet created or Qdrant was empty
+        pass
+
+    return {
+        "detail": "Document successfully deleted.",
+        "document_id": document_id,
+        "filename": doc.filename,
+    }

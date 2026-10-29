@@ -2,11 +2,27 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from fastapi.testclient import TestClient
+from qdrant_client import QdrantClient
 
 from app.main import app
+from app.services.vector_service import VectorService
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolate_qdrant_for_readiness(monkeypatch: pytest.MonkeyPatch):
+    """Ensure readiness tests use an isolated in-memory Qdrant instance."""
+    mem_client = QdrantClient(location=":memory:")
+    mem_vec = VectorService(
+        client=mem_client,
+        default_collection="policypilot_chunks",
+        default_dimension=384,
+    )
+    mem_vec.ensure_collection()
+    monkeypatch.setattr("app.routers.health.get_vector_service", lambda: mem_vec)
 
 
 def test_liveness_probe_returns_ok():
