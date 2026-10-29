@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     metadata_dir: str = "data/metadata"
     chunks_dir: str = "data/chunks"
     max_upload_size_bytes: int = 10 * 1024 * 1024  # 10 MB default
+    max_pdf_pages: int = 250  # Prevent DoS from massive / decompression-bomb PDFs
+    min_query_length: int = 2
+    max_query_length: int = 500
 
     # Document chunking configuration (in characters)
     target_chunk_size: int = 1000
@@ -155,6 +158,19 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"rag_request_timeout_seconds must be positive, "
                 f"got {self.rag_request_timeout_seconds}"
+            )
+        if self.max_pdf_pages <= 0:
+            raise ValueError(
+                f"max_pdf_pages must be positive, got {self.max_pdf_pages}"
+            )
+        if self.min_query_length <= 0:
+            raise ValueError(
+                f"min_query_length must be positive, got {self.min_query_length}"
+            )
+        if self.max_query_length < self.min_query_length:
+            raise ValueError(
+                f"max_query_length ({self.max_query_length}) must be >= "
+                f"min_query_length ({self.min_query_length})"
             )
         return self
 

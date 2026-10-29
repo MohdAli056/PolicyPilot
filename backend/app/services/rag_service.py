@@ -11,7 +11,13 @@ import time
 from typing import Optional
 
 from app.config import settings
-from app.schemas.qa import AskRequest, AskResponse, CitationItem, SourceItem
+from app.schemas.qa import (
+    AskRequest,
+    AskResponse,
+    CitationItem,
+    ClaimItem,
+    SourceItem,
+)
 from app.schemas.rerank_search import RerankSearchResultItem
 from app.services.llm_service import (
     BaseLLMProvider,
@@ -26,6 +32,64 @@ ABSTENTION_MESSAGE = (
     "The uploaded policy documents do not contain sufficient evidence "
     "to answer this question."
 )
+
+COMMON_STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "in",
+    "on",
+    "at",
+    "to",
+    "for",
+    "with",
+    "by",
+    "from",
+    "up",
+    "about",
+    "into",
+    "over",
+    "after",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "you",
+    "he",
+    "she",
+    "it",
+    "we",
+    "they",
+    "their",
+    "our",
+    "its",
+    "of",
+    "as",
+}
+
+
+def _extract_content_tokens(text: str) -> set[str]:
+    """Extract lowercased alphanumeric content tokens longer than 2 chars."""
+    tokens = re.findall(r"\b[A-Za-z0-9]{3,}\b", text.lower())
+    return {t for t in tokens if t not in COMMON_STOPWORDS}
+
 
 SYSTEM_GROUNDING_INSTRUCTION = (
     "You are PolicyPilot, an AI policy assistant that answers employee questions "
@@ -181,6 +245,63 @@ class RAGService:
         cleaned_answer = re.sub(r" +", " ", cleaned_answer).strip()
         return cleaned_answer, validated_citations
 
+    def _validate_claim_grounding(
+        self,
+        cleaned_answer: str,
+        source_map: dict[str, RerankSearchResultItem],
+    ) -> list[ClaimItem]:
+        """Segment answer into claims and verify lexical support in cited evidence."""
+        sentences = re.split(r"(?<=[.!?])\s+", cleaned_answer)
+        claims: list[ClaimItem] = []
+
+        for raw_sentence in sentences:
+            sentence = raw_sentence.strip()
+            if not sentence:
+                continue
+
+            sentence_tags = re.findall(r"\[(S\d+)\]", sentence)
+            sentence_clean = re.sub(r"\[S\d+\]", "", sentence).strip()
+            content_tokens = _extract_content_tokens(sentence_clean)
+
+            if not sentence_tags:
+                claims.append(
+                    ClaimItem(
+                        claim_text=sentence_clean,
+                        citation_ids=[],
+                        is_grounded=False,
+                        grounding_notes=(
+                            "No source citation provided for this statement."
+                        ),
+                    )
+                )
+                continue
+
+            grounded_tags: list[str] = []
+            for tag in sentence_tags:
+                if tag in source_map:
+                    chunk_tokens = _extract_content_tokens(source_map[tag].text)
+                    overlap = content_tokens & chunk_tokens
+                    if overlap or not content_tokens:
+                        grounded_tags.append(tag)
+
+            is_grounded = len(grounded_tags) > 0
+            notes = (
+                f"Verified lexical support with: {', '.join(grounded_tags)}"
+                if is_grounded
+                else "Cited source(s) lack lexical term overlap with this claim."
+            )
+
+            claims.append(
+                ClaimItem(
+                    claim_text=sentence_clean,
+                    citation_ids=sentence_tags,
+                    is_grounded=is_grounded,
+                    grounding_notes=notes,
+                )
+            )
+
+        return claims
+
     def _is_abstention(
         self,
         answer_text: str,
@@ -326,11 +447,14 @@ class RAGService:
             else 0.0
         )
 
+        claims = self._validate_claim_grounding(cleaned_answer, source_map)
+
         return AskResponse(
             question=question,
             answer=cleaned_answer,
             is_abstention=is_abstain,
             citations=citations,
+            claims=claims,
             sources=sources,
             model=llm.model_name,
             timing_ms={

@@ -63,6 +63,25 @@ class SourceItem(BaseModel):
     )
 
 
+class ClaimItem(BaseModel):
+    """An individual factual claim or sentence with its supporting citations."""
+
+    claim_text: str = Field(
+        ..., description="Sentence or statement segment from the answer"
+    )
+    citation_ids: list[str] = Field(
+        default_factory=list,
+        description="Source identifiers cited for this specific claim (e.g. ['S1'])",
+    )
+    is_grounded: bool = Field(
+        ...,
+        description="True if claim has verified lexical support in cited evidence",
+    )
+    grounding_notes: Optional[str] = Field(
+        None, description="Diagnostic notes or warnings regarding grounding"
+    )
+
+
 class AskRequest(BaseModel):
     """Request payload for answering a policy question."""
 
@@ -84,9 +103,11 @@ class AskRequest(BaseModel):
         stripped = v.strip()
         if not stripped:
             raise ValueError("Question cannot be empty or whitespace only")
-        if len(stripped) > 1000:
+        if len(stripped) < 2:
+            raise ValueError("Question must be at least 2 characters in length")
+        if len(stripped) > 500:
             raise ValueError(
-                "Question exceeds maximum allowed length of 1000 characters"
+                "Question exceeds maximum allowed length of 500 characters"
             )
         return stripped
 
@@ -119,6 +140,10 @@ class AskResponse(BaseModel):
     citations: list[CitationItem] = Field(
         default_factory=list,
         description="Validated citations directly backing factual claims in the answer",
+    )
+    claims: list[ClaimItem] = Field(
+        default_factory=list,
+        description="Claim-level grounding breakdown with supporting citation IDs",
     )
     sources: list[SourceItem] = Field(
         default_factory=list,

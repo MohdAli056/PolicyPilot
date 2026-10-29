@@ -10,6 +10,7 @@ from typing import Tuple
 
 import pymupdf
 
+from app.config import settings
 from app.schemas.document import PageExtraction
 
 
@@ -53,6 +54,22 @@ def extract_pdf_pages(file_path: Path) -> Tuple[list[PageExtraction], int, int, 
             "The uploaded file is empty or missing.", status_code=400
         )
 
+    # Validate PDF signature magic bytes (%PDF-) in the header
+    try:
+        with open(file_path, "rb") as f:
+            header_sample = f.read(1024)
+        if b"%PDF-" not in header_sample:
+            raise PDFValidationError(
+                "The uploaded file is not a valid PDF document "
+                "(missing PDF signature).",
+                status_code=400,
+            )
+    except OSError as exc:
+        raise PDFValidationError(
+            "Failed to read file for PDF validation.",
+            status_code=400,
+        ) from exc
+
     try:
         doc = pymupdf.open(file_path)
     except Exception as exc:
@@ -73,6 +90,12 @@ def extract_pdf_pages(file_path: Path) -> Tuple[list[PageExtraction], int, int, 
         if total_pages == 0:
             raise PDFValidationError(
                 "The PDF document contains no pages.",
+                status_code=400,
+            )
+        if total_pages > settings.max_pdf_pages:
+            raise PDFValidationError(
+                f"The PDF exceeds the maximum allowed limit of "
+                f"{settings.max_pdf_pages} pages (got {total_pages} pages).",
                 status_code=400,
             )
 

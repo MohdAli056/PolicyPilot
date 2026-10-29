@@ -1,6 +1,7 @@
 """Document ingestion, retrieval, and file download router."""
 
 import asyncio
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,8 +47,11 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentDetail:
             detail="Filename is missing.",
         )
 
-    # Sanitize client-supplied filename to prevent directory traversal
-    clean_filename = Path(file.filename).name
+    # Sanitize client-supplied filename to prevent directory traversal & injection
+    raw_name = Path(file.filename).name
+    clean_filename = re.sub(r"[^\w\.\-\s]", "_", raw_name).strip()
+    if not clean_filename or clean_filename == ".pdf":
+        clean_filename = f"policy_{uuid.uuid4().hex[:8]}.pdf"
 
     # Check extension
     if not clean_filename.lower().endswith(".pdf"):

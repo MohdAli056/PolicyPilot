@@ -1,0 +1,68 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: policypilot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=PolicyPilot
+      - DEBUG=false
+      - CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+      - DOCUMENTS_DIR=/app/data/documents
+      - METADATA_DIR=/app/data/metadata
+      - CHUNKS_DIR=/app/data/chunks
+      - QDRANT_PATH=/app/data/qdrant
+      - QDRANT_COLLECTION=policypilot_chunks
+      - EMBEDDING_PROVIDER=fastembed
+      - EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+      - EMBEDDING_DIMENSION=384
+      - RERANKER_PROVIDER=flashrank
+      - RERANKER_MODEL=ms-marco-TinyBERT-L-2-v2
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - LLM_PROVIDER=${LLM_PROVIDER:-gemini}
+      - LLM_MODEL=${LLM_MODEL:-gemini-2.5-flash}
+      - RAG_MAX_EVIDENCE_CHUNKS=5
+      - RAG_CONTEXT_CHAR_BUDGET=6000
+      - RAG_REQUEST_TIMEOUT_SECONDS=30.0
+      - RAG_ABSTENTION_SCORE_THRESHOLD=0.00001
+      - MAX_PDF_PAGES=250
+      - MIN_QUERY_LENGTH=2
+      - MAX_QUERY_LENGTH=500
+    volumes:
+      - policypilot_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 25s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=http://localhost:8000
+    container_name: policypilot-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  policypilot_data:
+    driver: local
